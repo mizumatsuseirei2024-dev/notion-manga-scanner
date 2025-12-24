@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Notion Manga Scanner v2</title>
+    <title>Notion Manga Scanner v3</title>
     <!-- React & ReactDOM -->
     <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
@@ -25,9 +25,32 @@
     <script type="text/babel">
         const { useState, useEffect, useRef } = React;
 
+        // --- ユーティリティ: タイトル解析 ---
+        // "ONE PIECE 100" や "進撃の巨人(34)" からタイトルと巻数を分離する
+        const parseBookTitle = (rawTitle) => {
+            // パターン: 末尾が数字、あるいはカッコに入った数字
+            // 例: "Title 10", "Title (10)", "Title（10）"
+            const regex = /^(.+?)\s*[\(（]?\s*(\d+)[\)）]?$/;
+            const match = rawTitle.match(regex);
+
+            if (match) {
+                return {
+                    full: rawTitle,
+                    series: match[1].trim(),
+                    volume: parseInt(match[2], 10)
+                };
+            } else {
+                return {
+                    full: rawTitle,
+                    series: rawTitle,
+                    volume: null // 巻数が判定できない場合はnull
+                };
+            }
+        };
+
         // --- コンポーネント: アプリ本体 ---
         function App() {
-            const [view, setView] = useState('scan'); // 'scan', 'history', 'settings'
+            const [view, setView] = useState('scan');
             const [scannedBooks, setScannedBooks] = useState([]);
             const [settings, setSettings] = useState({
                 notionToken: '',
@@ -35,7 +58,6 @@
                 proxyUrl: 'https://cors-anywhere.herokuapp.com/'
             });
 
-            // ローカルストレージから設定と履歴を読み込み
             useEffect(() => {
                 const savedSettings = localStorage.getItem('manga_scanner_settings');
                 if (savedSettings) setSettings(JSON.parse(savedSettings));
@@ -44,7 +66,6 @@
                 if (savedHistory) setScannedBooks(JSON.parse(savedHistory));
             }, []);
 
-            // 履歴保存
             useEffect(() => {
                 localStorage.setItem('manga_scanner_history', JSON.stringify(scannedBooks));
             }, [scannedBooks]);
@@ -52,20 +73,18 @@
             const addBook = (book) => {
                 // 重複チェック
                 if (scannedBooks.some(b => b.isbn === book.isbn)) {
-                    alert(`「${book.title}」は既にリストにあります。`);
+                    alert(`「${book.fullTitle}」は既にリストにあります。`);
                     return;
                 }
                 setScannedBooks([book, ...scannedBooks]);
-                // スキャン成功時にバイブレーション（対応端末のみ）
                 if (navigator.vibrate) navigator.vibrate(200);
                 setView('history');
             };
 
             return (
                 <div className="max-w-md mx-auto min-h-screen bg-white shadow-lg flex flex-col">
-                    {/* Header */}
                     <header className="bg-gray-800 text-white p-4 flex justify-between items-center sticky top-0 z-50">
-                        <h1 className="font-bold text-lg">📚 Manga Scanner v2</h1>
+                        <h1 className="font-bold text-lg">📚 Scanner v3</h1>
                         <div className="space-x-2">
                             <button onClick={() => setView('scan')} className={`px-3 py-1 rounded ${view === 'scan' ? 'bg-blue-600' : 'bg-gray-700'}`}>Scan</button>
                             <button onClick={() => setView('history')} className={`px-3 py-1 rounded ${view === 'history' ? 'bg-blue-600' : 'bg-gray-700'}`}>List ({scannedBooks.length})</button>
@@ -73,7 +92,6 @@
                         </div>
                     </header>
 
-                    {/* Content */}
                     <main className="flex-grow p-4">
                         {view === 'scan' && <Scanner onDetected={addBook} />}
                         {view === 'history' && <BookList books={scannedBooks} settings={settings} setBooks={setScannedBooks} />}
@@ -83,26 +101,22 @@
             );
         }
 
-        // --- コンポーネント: バーコードスキャナー & 手入力 & OpenBD連携 ---
+        // --- コンポーネント: Scanner ---
         function Scanner({ onDetected }) {
             const [scanning, setScanning] = useState(false);
             const [manualIsbn, setManualIsbn] = useState('');
             const [loading, setLoading] = useState(false);
-            const scannerRef = useRef(null);
             const html5QrcodeScannerRef = useRef(null);
 
             useEffect(() => {
                 if (!scanning) return;
-
-                // スキャナーの初期化
                 const html5QrcodeScanner = new Html5Qrcode("reader");
                 html5QrcodeScannerRef.current = html5QrcodeScanner;
 
                 const config = { 
                     fps: 10, 
-                    qrbox: { width: 250, height: 150 }, // バーコード用に横長
+                    qrbox: { width: 250, height: 150 },
                     aspect: 1.0,
-                    // 重要: EAN_13 (JANコード) のみに限定して認識精度を向上
                     formatsToSupport: [ Html5QrcodeSupportedFormats.EAN_13 ]
                 };
                 
@@ -110,33 +124,27 @@
                     { facingMode: "environment" }, 
                     config,
                     (decodedText) => {
-                        // 成功時
-                        console.log("Detected:", decodedText);
                         if (decodedText.startsWith('978')) {
                             stopScanner();
                             fetchBookData(decodedText);
                         }
                     },
-                    (errorMessage) => {
-                        // 読み取り中のエラーは無視
-                    }
+                    () => {}
                 ).catch(err => {
                     console.error("Camera start failed", err);
                     setScanning(false);
-                    alert("カメラの起動に失敗しました。HTTPS環境か確認してください。");
+                    alert("カメラの起動に失敗しました。");
                 });
 
-                return () => {
-                    stopScanner();
-                };
+                return () => stopScanner();
             }, [scanning]);
 
             const stopScanner = () => {
-                if (html5QrcodeScannerRef.current && html5QrcodeScannerRef.current.isScanning) {
+                if (html5QrcodeScannerRef.current?.isScanning) {
                     html5QrcodeScannerRef.current.stop().then(() => {
                         html5QrcodeScannerRef.current.clear();
                         setScanning(false);
-                    }).catch(err => console.error("Stop failed", err));
+                    }).catch(console.error);
                 } else {
                     setScanning(false);
                 }
@@ -145,19 +153,21 @@
             const fetchBookData = async (isbn) => {
                 setLoading(true);
                 try {
-                    // ハイフンなどを除去
                     const cleanIsbn = isbn.replace(/[^0-9]/g, '');
-                    if (cleanIsbn.length !== 13) {
-                        throw new Error("ISBNは13桁である必要があります(978...)");
-                    }
+                    if (cleanIsbn.length !== 13) throw new Error("ISBNは13桁必要です");
 
                     const res = await fetch(`https://api.openbd.jp/v1/get?isbn=${cleanIsbn}`);
                     const data = await res.json();
                     
                     if (data && data[0]) {
                         const summary = data[0].summary;
+                        // ここでタイトル解析を実行
+                        const parsed = parseBookTitle(summary.title);
+
                         const book = {
-                            title: summary.title,
+                            fullTitle: parsed.full,
+                            seriesName: parsed.series,
+                            volume: parsed.volume,
                             author: summary.author,
                             publisher: summary.publisher,
                             isbn: summary.isbn,
@@ -165,12 +175,11 @@
                             raw: data[0]
                         };
                         onDetected(book);
-                        setManualIsbn(''); // 入力欄クリア
+                        setManualIsbn('');
                     } else {
                         alert(`データが見つかりませんでした (ISBN: ${cleanIsbn})`);
                     }
                 } catch (e) {
-                    console.error(e);
                     alert(`エラー: ${e.message}`);
                 } finally {
                     setLoading(false);
@@ -179,92 +188,61 @@
 
             const handleManualSubmit = (e) => {
                 e.preventDefault();
-                if (!manualIsbn) return;
-                fetchBookData(manualIsbn);
+                if (manualIsbn) fetchBookData(manualIsbn);
             };
 
             return (
                 <div className="flex flex-col items-center space-y-6">
-                    {/* カメラエリア */}
                     <div className="w-full">
                         <div id="reader" className={`w-full bg-black rounded-lg overflow-hidden border-2 border-gray-300 relative ${scanning ? 'h-64' : 'h-12'}`}>
                             {!scanning && (
-                                <div className="absolute inset-0 flex items-center justify-center text-white bg-gray-800 text-sm">
-                                    カメラ停止中
-                                </div>
+                                <div className="absolute inset-0 flex items-center justify-center text-white bg-gray-800 text-sm">カメラ停止中</div>
                             )}
                         </div>
                         
                         {!scanning ? (
-                            <button 
-                                onClick={() => setScanning(true)} 
-                                className="mt-2 bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-full shadow-lg w-full flex justify-center items-center"
-                            >
+                            <button onClick={() => setScanning(true)} className="mt-2 bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-full shadow-lg w-full flex justify-center items-center">
                                 <span className="mr-2">📷</span> カメラを起動
                             </button>
                         ) : (
-                            <button 
-                                onClick={stopScanner} 
-                                className="mt-2 bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-6 rounded-full shadow w-full"
-                            >
-                                スキャンを停止
-                            </button>
+                            <button onClick={stopScanner} className="mt-2 bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-6 rounded-full shadow w-full">停止</button>
                         )}
-                        
-                        {scanning && <p className="text-center text-xs text-gray-500 mt-2">バーコードを枠内に合わせてください</p>}
                     </div>
 
-                    {/* 手入力エリア */}
                     <div className="w-full border-t pt-6">
-                        <h3 className="text-center font-bold text-gray-700 mb-3">または ISBN番号を手入力</h3>
+                        <h3 className="text-center font-bold text-gray-700 mb-3">または ISBN入力</h3>
                         <form onSubmit={handleManualSubmit} className="flex gap-2">
-                            <input 
-                                type="tel" 
-                                value={manualIsbn}
-                                onChange={(e) => setManualIsbn(e.target.value)}
-                                placeholder="9784..." 
-                                className="flex-grow p-3 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 outline-none"
-                                maxLength="13"
-                            />
-                            <button 
-                                type="submit" 
-                                disabled={loading}
-                                className="bg-green-600 hover:bg-green-700 text-white font-bold px-4 rounded shadow disabled:bg-gray-400"
-                            >
-                                {loading ? '検索中...' : '検索'}
-                            </button>
+                            <input type="tel" value={manualIsbn} onChange={(e) => setManualIsbn(e.target.value)} placeholder="9784..." className="flex-grow p-3 border rounded" maxLength="13" />
+                            <button type="submit" disabled={loading} className="bg-green-600 text-white font-bold px-4 rounded shadow">{loading ? '...' : '検索'}</button>
                         </form>
-                        <p className="text-xs text-gray-500 mt-2">※ 本の裏表紙にある「978」から始まる13桁の数字を入力してください。</p>
                     </div>
 
-                    {loading && (
-                        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-                            <div className="bg-white p-4 rounded-lg shadow-lg">
-                                <p className="font-bold">📚 情報を取得中...</p>
-                            </div>
-                        </div>
-                    )}
+                    {loading && <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"><div className="bg-white p-4 rounded">情報を取得中...</div></div>}
                 </div>
             );
         }
 
-        // --- コンポーネント: 書籍リスト & Notion送信 ---
+        // --- コンポーネント: BookList ---
         function BookList({ books, settings, setBooks }) {
-            const [status, setStatus] = useState({}); // 'loading', 'success', 'error'
+            const [status, setStatus] = useState({});
 
             const sendToNotion = async (book) => {
                 if (!settings.notionToken || !settings.databaseId) {
-                    alert("設定画面でNotion APIトークンとデータベースIDを設定してください。");
+                    alert("設定画面でAPIトークンとデータベースIDを設定してください。");
                     return;
                 }
 
                 setStatus(prev => ({ ...prev, [book.isbn]: 'loading' }));
 
+                // Notion送信ペイロード（ここを修正）
                 const payload = {
                     parent: { database_id: settings.databaseId },
                     cover: book.cover ? { type: "external", external: { url: book.cover } } : null,
                     properties: {
-                        "名前": { title: [{ text: { content: book.title } }] },
+                        "名前": { title: [{ text: { content: book.fullTitle } }] },
+                        // 追加: 作品名と巻数
+                        "作品名": { rich_text: [{ text: { content: book.seriesName } }] },
+                        "巻数": book.volume ? { number: book.volume } : null,
                         "著作者": { rich_text: [{ text: { content: book.author } }] },
                         "出版社": { rich_text: [{ text: { content: book.publisher } }] },
                         "ISBN": { rich_text: [{ text: { content: book.isbn } }] }
@@ -288,74 +266,48 @@
                     if (response.ok) {
                         setStatus(prev => ({ ...prev, [book.isbn]: 'success' }));
                     } else {
-                        const errText = await response.text();
-                        console.error("Notion Error:", errText);
-                        throw new Error("Notion API Error: " + response.status);
+                        throw new Error(await response.text());
                     }
                 } catch (error) {
                     console.error(error);
                     setStatus(prev => ({ ...prev, [book.isbn]: 'error' }));
-                    alert(`送信失敗: ${error.message}\n\n※ CORSエラーの場合はプロキシ設定を確認するか、JSONコピー機能を使用してください。`);
+                    alert("送信エラー。プロキシ許可期限切れの可能性があります。");
                 }
-            };
-
-            const copyToClipboard = (book) => {
-                const text = `${book.title}\t${book.author}\t${book.publisher}\t${book.isbn}`;
-                navigator.clipboard.writeText(text);
-                alert("タブ区切りテキストをコピーしました。Notionのテーブルに貼り付け可能です。");
             };
 
             const copyAll = () => {
-                const text = books.map(b => `${b.title}\t${b.author}\t${b.publisher}\t${b.isbn}`).join('\n');
+                // コピー形式も、Excel等に貼りやすいようにタブ区切りで分割
+                const text = books.map(b => `${b.fullTitle}\t${b.seriesName}\t${b.volume || ''}\t${b.author}\t${b.publisher}\t${b.isbn}`).join('\n');
                 navigator.clipboard.writeText(text);
-                alert("全件のデータをコピーしました。Notionで複数行を選択して貼り付けてください。");
-            };
-            
-            const removeBook = (isbn) => {
-                if(confirm('この本をリストから削除しますか？')) {
-                    setBooks(books.filter(b => b.isbn !== isbn));
-                }
+                alert("全件コピーしました（タイトル / 作品名 / 巻数 / 著者...）");
             };
 
-            if (books.length === 0) {
-                return <div className="text-center text-gray-500 py-10">スキャンまたは入力した本はありません。</div>;
-            }
+            const removeBook = (isbn) => {
+                if(confirm('削除しますか？')) setBooks(books.filter(b => b.isbn !== isbn));
+            };
+
+            if (books.length === 0) return <div className="text-center text-gray-500 py-10">リストは空です</div>;
 
             return (
                 <div className="space-y-4">
                     <div className="flex justify-end mb-2">
-                        <button onClick={copyAll} className="text-sm bg-gray-200 hover:bg-gray-300 px-3 py-1 rounded text-gray-700">
-                            📋 全件コピー
-                        </button>
+                        <button onClick={copyAll} className="text-sm bg-gray-200 hover:bg-gray-300 px-3 py-1 rounded text-gray-700">📋 全件コピー</button>
                     </div>
                     {books.map((book, idx) => (
                         <div key={idx} className="bg-white border rounded-lg p-3 flex shadow-sm items-start">
-                            {book.cover ? (
-                                <img src={book.cover} alt="cover" className="w-16 h-24 object-cover rounded mr-3 bg-gray-200" />
-                            ) : (
-                                <div className="w-16 h-24 bg-gray-200 rounded mr-3 flex items-center justify-center text-xs text-gray-500">No Img</div>
-                            )}
+                            {book.cover ? <img src={book.cover} className="w-16 h-24 object-cover rounded mr-3 bg-gray-200" /> : <div className="w-16 h-24 bg-gray-200 rounded mr-3 flex items-center justify-center text-xs">No Img</div>}
                             <div className="flex-grow">
-                                <h3 className="font-bold text-sm mb-1">{book.title}</h3>
+                                <h3 className="font-bold text-sm">{book.fullTitle}</h3>
+                                {/* 分割結果の表示 */}
+                                <div className="flex items-center text-xs text-blue-600 mb-1 space-x-2">
+                                    <span className="bg-blue-50 px-1 rounded">作品: {book.seriesName}</span>
+                                    {book.volume && <span className="bg-blue-50 px-1 rounded">巻: {book.volume}</span>}
+                                </div>
                                 <p className="text-xs text-gray-600 mb-2">{book.author} / {book.publisher}</p>
-                                <div className="flex space-x-2 flex-wrap gap-y-2">
-                                    <button 
-                                        onClick={() => sendToNotion(book)}
-                                        disabled={status[book.isbn] === 'success'}
-                                        className={`text-xs px-2 py-1 rounded text-white flex items-center ${
-                                            status[book.isbn] === 'success' ? 'bg-green-500' : 
-                                            status[book.isbn] === 'error' ? 'bg-red-500' : 'bg-blue-600'
-                                        }`}
-                                    >
-                                        {status[book.isbn] === 'loading' ? '送信中...' : 
-                                         status[book.isbn] === 'success' ? '送信済' : 
-                                         status[book.isbn] === 'error' ? '再試行' : 'Notionへ送信'}
-                                    </button>
-                                    <button 
-                                        onClick={() => copyToClipboard(book)}
-                                        className="text-xs px-2 py-1 rounded bg-gray-200 text-gray-700"
-                                    >
-                                        コピー
+                                
+                                <div className="flex space-x-2">
+                                    <button onClick={() => sendToNotion(book)} disabled={status[book.isbn] === 'success'} className={`text-xs px-3 py-1 rounded text-white ${status[book.isbn] === 'success' ? 'bg-green-500' : status[book.isbn] === 'error' ? 'bg-red-500' : 'bg-blue-600'}`}>
+                                        {status[book.isbn] === 'success' ? '送信済' : 'Notionへ送信'}
                                     </button>
                                     <button onClick={() => removeBook(book.isbn)} className="text-xs text-red-400 p-1">削除</button>
                                 </div>
@@ -366,56 +318,20 @@
             );
         }
 
-        // --- コンポーネント: 設定 ---
+        // --- コンポーネント: Settings (変更なし) ---
         function Settings({ settings, setSettings }) {
             const handleChange = (e) => {
                 const { name, value } = e.target;
                 setSettings({ ...settings, [name]: value });
                 localStorage.setItem('manga_scanner_settings', JSON.stringify({ ...settings, [name]: value }));
             };
-
             return (
                 <div className="space-y-4 pb-10">
                     <h2 className="font-bold text-xl mb-4">設定</h2>
-                    
-                    <div>
-                        <label className="block text-sm font-medium text-gray-700">Notion Integration Token</label>
-                        <input 
-                            type="password" 
-                            name="notionToken"
-                            value={settings.notionToken}
-                            onChange={handleChange}
-                            placeholder="secret_..."
-                            className="mt-1 block w-full p-2 border border-gray-300 rounded shadow-sm focus:ring-blue-500 focus:border-blue-500"
-                        />
-                    </div>
-
-                    <div>
-                        <label className="block text-sm font-medium text-gray-700">Database ID</label>
-                        <input 
-                            type="text" 
-                            name="databaseId"
-                            value={settings.databaseId}
-                            onChange={handleChange}
-                            placeholder="32桁のID"
-                            className="mt-1 block w-full p-2 border border-gray-300 rounded shadow-sm focus:ring-blue-500 focus:border-blue-500"
-                        />
-                    </div>
-
-                    <div>
-                        <label className="block text-sm font-medium text-gray-700">CORS Proxy URL</label>
-                        <input 
-                            type="text" 
-                            name="proxyUrl"
-                            value={settings.proxyUrl}
-                            onChange={handleChange}
-                            placeholder="https://cors-anywhere.herokuapp.com/"
-                            className="mt-1 block w-full p-2 border border-gray-300 rounded shadow-sm focus:ring-blue-500 focus:border-blue-500"
-                        />
-                        <p className="text-xs text-blue-500 mt-2">
-                            <a href="https://cors-anywhere.herokuapp.com/corsdemo" target="_blank" className="underline">ここをクリックしてProxyのアクセス許可を更新</a>
-                        </p>
-                    </div>
+                    <div><label className="block text-sm">Notion Integration Token</label><input type="password" name="notionToken" value={settings.notionToken} onChange={handleChange} className="w-full p-2 border rounded" /></div>
+                    <div><label className="block text-sm">Database ID</label><input type="text" name="databaseId" value={settings.databaseId} onChange={handleChange} className="w-full p-2 border rounded" /></div>
+                    <div><label className="block text-sm">CORS Proxy URL</label><input type="text" name="proxyUrl" value={settings.proxyUrl} onChange={handleChange} className="w-full p-2 border rounded" />
+                    <p className="text-xs text-blue-500 mt-2"><a href="https://cors-anywhere.herokuapp.com/corsdemo" target="_blank" className="underline">Proxy許可の更新</a></p></div>
                 </div>
             );
         }
