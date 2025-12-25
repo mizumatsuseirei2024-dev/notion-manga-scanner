@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Notion Manga Scanner v4.9</title>
+    <title>Notion Manga Scanner v4.10</title>
     <!-- React & ReactDOM -->
     <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
@@ -85,9 +85,7 @@
             }, [scannedBooks]);
 
             const addBook = (book) => {
-                // 重複チェック: 同じISBNがあればアラート、なければ追加
                 if (scannedBooks.some(b => b.isbn === book.isbn)) {
-                    // 既にリストにある場合、スキャン画面のままアラートだけ出す
                     alert(`「${book.fullTitle}」は既にリストにあります。`);
                     return;
                 }
@@ -103,7 +101,7 @@
             return (
                 <div className="max-w-md mx-auto min-h-screen bg-white shadow-lg flex flex-col">
                     <header className="bg-gray-800 text-white p-4 flex justify-between items-center sticky top-0 z-50">
-                        <h1 className="font-bold text-lg">📚 Scanner v4.9</h1>
+                        <h1 className="font-bold text-lg">📚 Scanner v4.10</h1>
                         <div className="space-x-2">
                             <button onClick={() => setView('scan')} className={`px-3 py-1 rounded ${view === 'scan' ? 'bg-blue-600' : 'bg-gray-700'}`}>Scan</button>
                             <button onClick={() => setView('history')} className={`px-3 py-1 rounded ${view === 'history' ? 'bg-blue-600' : 'bg-gray-700'}`}>List ({scannedBooks.length})</button>
@@ -362,7 +360,15 @@
 
                 setStatus(prev => ({ ...prev, [book.isbn]: 'loading' }));
 
-                const secureCoverUrl = book.cover ? book.cover.replace(/^http:\/\//i, 'https://') : null;
+                // 画像URLの適正化: Notionはhttpを受け付けない + GoogleBooksのedge=curlパラメータを除去
+                let secureCoverUrl = null;
+                if (book.cover) {
+                    secureCoverUrl = book.cover.replace(/^http:\/\//i, 'https://');
+                    if (secureCoverUrl.includes('books.google.com')) {
+                        secureCoverUrl = secureCoverUrl.replace('&edge=curl', '');
+                    }
+                }
+                
                 const safeText = (text) => text && String(text).trim().length > 0 ? String(text) : "-";
 
                 const payload = {
@@ -379,7 +385,7 @@
                             "書影": {
                                 "files": [
                                     {
-                                        "name": "Cover",
+                                        "name": safeText(book.fullTitle), // ファイル名をタイトルにして一意性を高める
                                         "type": "external",
                                         "external": { "url": secureCoverUrl }
                                     }
