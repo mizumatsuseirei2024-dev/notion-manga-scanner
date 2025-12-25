@@ -2,15 +2,11 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Notion Manga Scanner v4.17</title>
-    <!-- Error Handling for Debug -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Notion Manga Scanner v5.0.1</title>
     <script>
         window.onerror = function(msg, url, line, col, error) {
-            const div = document.createElement("div");
-            div.style.cssText = "position:fixed; top:0; left:0; width:100%; background:red; color:white; padding:10px; z-index:9999;";
-            div.innerText = "Error: " + msg + " (Line: " + line + ")";
-            document.body.appendChild(div);
+            console.error("Error: " + msg + " (Line: " + line + ")");
         };
     </script>
     <!-- React & ReactDOM -->
@@ -20,21 +16,111 @@
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- HTML5-QRCode Scanner Library -->
+    <!-- HTML5-QRCode -->
     <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
     
     <style>
-        body { background-color: #f3f4f6; }
-        #reader video { object-fit: cover; border-radius: 0.5rem; }
+        :root {
+            --bg-color: #292d3e;
+            --text-main: #e0e6ed;
+            --text-sub: #676e8a;
+            --accent: #00d1b2; /* Cyan */
+            --shadow-light: #353a50;
+            --shadow-dark: #1d202c;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        /* Neumorphism Utilities */
+        .neu-flat {
+            background: var(--bg-color);
+            box-shadow: 6px 6px 12px var(--shadow-dark), -6px -6px 12px var(--shadow-light);
+            border-radius: 1.5rem;
+            border: 1px solid rgba(255,255,255,0.02);
+        }
+        
+        .neu-btn {
+            background: linear-gradient(145deg, #2c3042, #252838);
+            box-shadow: 5px 5px 10px var(--shadow-dark), -5px -5px 10px var(--shadow-light);
+            border-radius: 9999px;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+            color: var(--text-main);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: 1px solid rgba(255,255,255,0.05);
+        }
+        
+        .neu-btn:active {
+            box-shadow: inset 4px 4px 8px var(--shadow-dark), inset -4px -4px 8px var(--shadow-light);
+            transform: scale(0.98);
+        }
+
+        .neu-btn.active {
+            box-shadow: inset 4px 4px 8px var(--shadow-dark), inset -4px -4px 8px var(--shadow-light);
+            color: var(--accent);
+        }
+
+        .neu-pressed {
+            background: var(--bg-color);
+            box-shadow: inset 4px 4px 8px var(--shadow-dark), inset -4px -4px 8px var(--shadow-light);
+            border-radius: 1rem;
+            border: none;
+        }
+
+        .neu-input {
+            background: var(--bg-color);
+            box-shadow: inset 3px 3px 6px var(--shadow-dark), inset -3px -3px 6px var(--shadow-light);
+            border-radius: 0.75rem;
+            color: var(--text-main);
+            border: none;
+            outline: none;
+            transition: box-shadow 0.2s;
+        }
+        .neu-input:focus {
+            box-shadow: inset 4px 4px 8px var(--shadow-dark), inset -4px -4px 8px var(--shadow-light), 0 0 0 1px var(--accent);
+        }
+
+        /* Animations */
+        @keyframes slide-up {
+            from { transform: translateY(100%); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+        .animate-slide-up { animation: slide-up 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+
+        @keyframes fade-in {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        .animate-fade-in { animation: fade-in 0.2s ease-out forwards; }
+
+        @keyframes pop {
+            0% { transform: scale(0.9); opacity: 0; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        .animate-pop { animation: pop 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
+
+        /* Custom Scrollbar */
+        .hide-scrollbar::-webkit-scrollbar { display: none; }
+        .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+        #reader video {
+            border-radius: 1rem;
+            opacity: 0.8;
+            filter: contrast(1.1) brightness(1.1);
+        }
     </style>
 </head>
 <body>
     <div id="root">
-        <!-- Reactがマウントされるまでのローディング表示 -->
-        <div class="min-h-screen flex items-center justify-center text-gray-500">
-            <div class="text-center">
-                <p class="text-xl font-bold mb-2">🚀 Loading...</p>
-                <p class="text-sm">アプリを読み込んでいます。<br>画面が変わらない場合は再読み込みしてください。</p>
+        <div class="min-h-screen flex items-center justify-center bg-[#292d3e]">
+            <div class="neu-flat w-16 h-16 flex items-center justify-center animate-pulse">
+                <span style="font-size: 24px;">📚</span>
             </div>
         </div>
     </div>
@@ -42,40 +128,44 @@
     <script type="text/babel">
         const { useState, useEffect, useRef } = React;
 
-        // --- ユーティリティ: タイトル解析 ---
+        // --- Icons (Inline SVG Components to avoid CDN errors) ---
+        const Icon = ({ children, size = 24, ...props }) => (
+            <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}>
+                {children}
+            </svg>
+        );
+        const ScanLine = (props) => <Icon {...props}><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><line x1="7" x2="17" y1="12" y2="12"/></Icon>;
+        const List = (props) => <Icon {...props}><line x1="8" x2="21" y1="6" y2="6"/><line x1="8" x2="21" y1="12" y2="12"/><line x1="8" x2="21" y1="18" y2="18"/><line x1="3" x2="3.01" y1="6" y2="6"/><line x1="3" x2="3.01" y1="12" y2="12"/><line x1="3" x2="3.01" y1="18" y2="18"/></Icon>;
+        const Settings = (props) => <Icon {...props}><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.47a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></Icon>;
+        const X = (props) => <Icon {...props}><path d="M18 6 6 18"/><path d="m6 6 12 12"/></Icon>;
+        const Search = (props) => <Icon {...props}><circle cx="11" cy="11" r="8"/><line x1="21" x2="16.65" y1="21" y2="16.65"/></Icon>;
+        const Edit2 = (props) => <Icon {...props}><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></Icon>;
+
+        // --- Logic: Title Parsing ---
         const parseBookTitle = (rawTitle, onixVolume = null) => {
             if (!rawTitle) return { full: "", series: "", volume: null };
             let title = rawTitle.replace(/[！-～]/g, s => String.fromCharCode(s.charCodeAt(0) - 0xFEE0)).trim();
             title = title.replace(/\s+/g, ' ');
-
             let seriesName = title;
             let volume = null;
-
             if (onixVolume) {
                 volume = parseInt(onixVolume, 10);
                 const cleanRegex = new RegExp(`[\\s\\(（\\[]*?(?:第|v|vol\\.?)?\\s*${volume}(?:巻)?[\\)）\\]]*?(?:\\(.+?\\)|（.+?）|<.+?>)?$`, 'i');
-                seriesName = title.replace(cleanRegex, '').trim();
-                seriesName = seriesName.replace(/[\(\[\-]$/, '').trim();
+                seriesName = title.replace(cleanRegex, '').trim().replace(/[\(\[\-]$/, '').trim();
                 return { full: rawTitle, series: seriesName, volume: volume };
             }
-
             const regex = /^(.+?)[\s\.\-\(（\[]*?(?:第|v|vol\.?|volume|part)?\s*(\d+)(?:巻)?[\s\)）\]]*?(?:\(.+?\)|（.+?）|<.+?>)?$/i;
             const match = title.match(regex);
-
             if (match) {
                 seriesName = match[1].trim();
                 volume = parseInt(match[2], 10);
                 seriesName = seriesName.replace(/[\(\[\-]$/, '').trim();
             }
-
-            return { 
-                full: rawTitle, 
-                series: seriesName, 
-                volume: volume 
-            };
+            return { full: rawTitle, series: seriesName, volume: volume };
         };
 
-        // --- コンポーネント: アプリ本体 ---
+        // --- Components ---
+
         function App() {
             const [view, setView] = useState('scan');
             const [scannedBooks, setScannedBooks] = useState([]);
@@ -92,26 +182,20 @@
                     if (!parsed.proxyUrl) parsed.proxyUrl = 'https://cors-anywhere.herokuapp.com/';
                     setSettings(parsed);
                 }
-                
                 const savedHistory = localStorage.getItem('manga_scanner_history');
                 if (savedHistory) setScannedBooks(JSON.parse(savedHistory));
             }, []);
 
-            useEffect(() => {
-                localStorage.setItem('manga_scanner_settings', JSON.stringify(settings));
-            }, [settings]);
-
-            useEffect(() => {
-                localStorage.setItem('manga_scanner_history', JSON.stringify(scannedBooks));
-            }, [scannedBooks]);
+            useEffect(() => { localStorage.setItem('manga_scanner_settings', JSON.stringify(settings)); }, [settings]);
+            useEffect(() => { localStorage.setItem('manga_scanner_history', JSON.stringify(scannedBooks)); }, [scannedBooks]);
 
             const addBook = (book) => {
                 if (scannedBooks.some(b => b.isbn === book.isbn)) {
-                    alert(`「${book.fullTitle}」は既にリストにあります。`);
+                    alert('リストに存在します');
                     return;
                 }
                 setScannedBooks([book, ...scannedBooks]);
-                if (navigator.vibrate) navigator.vibrate(200);
+                if (navigator.vibrate) navigator.vibrate(50);
                 setView('history');
             };
 
@@ -120,511 +204,433 @@
             };
 
             return (
-                <div className="max-w-md mx-auto min-h-screen bg-white shadow-lg flex flex-col">
-                    <header className="bg-gray-800 text-white p-4 flex justify-between items-center sticky top-0 z-50">
-                        <h1 className="font-bold text-lg">📚 Scanner v4.17</h1>
-                        <div className="space-x-2">
-                            <button onClick={() => setView('scan')} className={`px-3 py-1 rounded ${view === 'scan' ? 'bg-blue-600' : 'bg-gray-700'}`}>Scan</button>
-                            <button onClick={() => setView('history')} className={`px-3 py-1 rounded ${view === 'history' ? 'bg-blue-600' : 'bg-gray-700'}`}>List ({scannedBooks.length})</button>
-                            <button onClick={() => setView('settings')} className={`px-3 py-1 rounded ${view === 'settings' ? 'bg-blue-600' : 'bg-gray-700'}`}>⚙️</button>
+                <div className="relative w-full h-screen overflow-hidden flex flex-col">
+                    {/* Header */}
+                    <div className="flex items-center justify-between px-6 pt-6 pb-2 z-10">
+                        <div className="flex items-center gap-3">
+                            <div className="neu-flat w-10 h-10 flex items-center justify-center text-xl">📚</div>
+                            <h1 className="text-xl font-bold tracking-wider text-[var(--text-main)]">SCANNER</h1>
                         </div>
-                    </header>
+                        <div className="text-[10px] text-[var(--text-sub)] font-mono tracking-widest">V5.0</div>
+                    </div>
 
-                    <main className="flex-grow p-4">
-                        {view === 'scan' && <Scanner onDetected={addBook} />}
-                        {view === 'history' && <BookList books={scannedBooks} settings={settings} setBooks={setScannedBooks} onUpdate={updateBook} />}
-                        {view === 'settings' && <Settings settings={settings} setSettings={setSettings} />}
-                    </main>
+                    {/* Main View Area */}
+                    <div className="flex-grow overflow-y-auto hide-scrollbar px-4 pb-32">
+                        {view === 'scan' && <ScannerView onDetected={addBook} />}
+                        {view === 'history' && <HistoryView books={scannedBooks} settings={settings} setBooks={setScannedBooks} onUpdate={updateBook} />}
+                        {view === 'settings' && <SettingsView settings={settings} setSettings={setSettings} />}
+                    </div>
+
+                    {/* Radial Menu Navigation */}
+                    <RadialMenu currentView={view} setView={setView} badgeCount={scannedBooks.length} />
                 </div>
             );
         }
 
-        // --- コンポーネント: Scanner ---
-        function Scanner({ onDetected }) {
+        // --- Radial Menu ---
+        function RadialMenu({ currentView, setView, badgeCount }) {
+            const [isOpen, setIsOpen] = useState(false);
+
+            const toggle = () => setIsOpen(!isOpen);
+            const handleSelect = (v) => {
+                setView(v);
+                setIsOpen(false);
+            };
+
+            const menuItems = [
+                { id: 'scan', icon: ScanLine, label: 'SCAN', color: '#00d1b2' },
+                { id: 'history', icon: List, label: 'LIST', color: '#ff0080' },
+                { id: 'settings', icon: Settings, label: 'SETTING', color: '#7928ca' },
+            ];
+
+            return (
+                <div className="fixed bottom-8 right-8 z-50 flex items-center justify-center">
+                    {/* Menu Items */}
+                    <div className={`absolute transition-all duration-300 ${isOpen ? 'scale-100 opacity-100' : 'scale-50 opacity-0 pointer-events-none'}`}>
+                        {menuItems.map((item, index) => {
+                            // Radial positioning
+                            const angle = (index * 90) / (menuItems.length - 1) + 180; // 180 to 270 degrees
+                            const radius = 90;
+                            const x = Math.cos((angle * Math.PI) / 180) * radius;
+                            const y = Math.sin((angle * Math.PI) / 180) * radius;
+                            
+                            const isActive = currentView === item.id;
+
+                            return (
+                                <button
+                                    key={item.id}
+                                    onClick={() => handleSelect(item.id)}
+                                    className={`absolute w-12 h-12 rounded-full flex items-center justify-center neu-btn text-[var(--text-main)] transition-all duration-300 ${isActive ? 'text-[var(--accent)] border-[var(--accent)]' : ''}`}
+                                    style={{ 
+                                        transform: `translate(${x}px, ${y}px)`,
+                                        boxShadow: isActive ? `0 0 15px ${item.color}40, 5px 5px 10px var(--shadow-dark), -5px -5px 10px var(--shadow-light)` : undefined
+                                    }}
+                                >
+                                    <item.icon size={20} />
+                                    {item.id === 'history' && badgeCount > 0 && (
+                                        <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full text-[9px] flex items-center justify-center text-white font-bold">{badgeCount}</span>
+                                    )}
+                                </button>
+                            );
+                        })}
+                    </div>
+
+                    {/* Main FAB */}
+                    <button 
+                        onClick={toggle}
+                        className={`w-16 h-16 rounded-full neu-btn z-50 transition-transform duration-300 ${isOpen ? 'rotate-45' : 'rotate-0'}`}
+                        style={{ color: isOpen ? '#ff4d4d' : 'var(--accent)' }}
+                    >
+                        <div className="text-2xl font-light">+</div>
+                    </button>
+                </div>
+            );
+        }
+
+        // --- Views ---
+
+        function ScannerView({ onDetected }) {
             const [scanning, setScanning] = useState(false);
             const [manualIsbn, setManualIsbn] = useState('');
             const [loading, setLoading] = useState(false);
-            const html5QrcodeScannerRef = useRef(null);
+            const scannerRef = useRef(null);
 
             useEffect(() => {
                 if (!scanning) return;
-                const html5QrcodeScanner = new Html5Qrcode("reader");
-                html5QrcodeScannerRef.current = html5QrcodeScanner;
-
-                const config = { 
-                    fps: 10, 
-                    qrbox: { width: 250, height: 150 },
-                    aspect: 1.0,
-                    formatsToSupport: [ Html5QrcodeSupportedFormats.EAN_13 ]
-                };
-                
-                html5QrcodeScanner.start(
-                    { facingMode: "environment" }, 
-                    config,
-                    (decodedText) => {
-                        if (decodedText.startsWith('978')) {
-                            stopScanner();
-                            fetchBookData(decodedText);
-                        }
-                    },
+                const scanner = new Html5Qrcode("reader");
+                scannerRef.current = scanner;
+                scanner.start({ facingMode: "environment" }, { fps: 10, qrbox: { width: 250, height: 150 }, aspect: 1.0, formatsToSupport: [ Html5QrcodeSupportedFormats.EAN_13 ] }, 
+                    (decoded) => { if (decoded.startsWith('978')) { stopScanner(); fetchBookData(decoded); } }, 
                     () => {}
-                ).catch(err => {
-                    console.error(err);
-                    setScanning(false);
-                    alert("カメラの起動に失敗しました。");
-                });
-
+                ).catch(e => { console.error(e); setScanning(false); alert("カメラ起動エラー"); });
                 return () => stopScanner();
             }, [scanning]);
 
             const stopScanner = () => {
-                if (html5QrcodeScannerRef.current?.isScanning) {
-                    html5QrcodeScannerRef.current.stop().then(() => {
-                        html5QrcodeScannerRef.current.clear();
-                        setScanning(false);
-                    }).catch(console.error);
-                } else {
-                    setScanning(false);
-                }
+                if (scannerRef.current?.isScanning) scannerRef.current.stop().then(() => scannerRef.current.clear()).catch(console.error);
+                setScanning(false);
             };
 
             const fetchBookData = async (isbn) => {
                 setLoading(true);
                 try {
                     const cleanIsbn = isbn.replace(/[^0-9]/g, '');
-                    if (cleanIsbn.length !== 13) throw new Error("ISBNは13桁必要です");
-
+                    if (cleanIsbn.length !== 13) throw new Error("13桁のISBNを入力してください");
+                    
                     const res = await fetch(`https://api.openbd.jp/v1/get?isbn=${cleanIsbn}`);
                     const data = await res.json();
                     
                     if (data && data[0]) {
-                        const summary = data[0].summary;
-                        const onix = data[0].onix;
+                        const s = data[0].summary;
+                        const o = data[0].onix;
+                        let { title: t, author: a, publisher: p, cover: c } = s;
+                        let vol = null;
 
-                        let titleText = summary.title;
-                        let authorText = summary.author;
-                        let publisherText = summary.publisher;
-                        let coverUrl = summary.cover;
-
-                        let onixVolume = null;
+                        // ONIX Vol check
                         try {
-                             if (onix?.DescriptiveDetail?.TitleDetail?.TitleElement) {
-                                 const elements = Array.isArray(onix.DescriptiveDetail.TitleDetail.TitleElement) 
-                                     ? onix.DescriptiveDetail.TitleDetail.TitleElement 
-                                     : [onix.DescriptiveDetail.TitleDetail.TitleElement];
-                                 const partNumEl = elements.find(el => el.PartNumber);
-                                 if (partNumEl) onixVolume = partNumEl.PartNumber;
-                             }
-                        } catch (err) { console.log("ONIX parse error", err); }
+                             const te = o?.DescriptiveDetail?.TitleDetail?.TitleElement;
+                             const els = Array.isArray(te) ? te : [te];
+                             const pel = els?.find(el => el?.PartNumber);
+                             if (pel) vol = pel.PartNumber;
+                        } catch (e) {}
 
+                        // Google Fallback
                         try {
-                            const gRes = await fetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${cleanIsbn}`);
-                            const gData = await gRes.json();
-                            if (gData.items && gData.items.length > 0) {
-                                const gInfo = gData.items[0].volumeInfo;
-                                if (!coverUrl && gInfo.imageLinks?.thumbnail) {
-                                    coverUrl = gInfo.imageLinks.thumbnail.replace(/^http:\/\//, 'https://');
-                                }
-                                if (gInfo.authors && gInfo.authors.length > 0) {
-                                    authorText = gInfo.authors.join(', ');
-                                }
-                                if (gInfo.title && !onixVolume) {
-                                    const gParsed = parseBookTitle(gInfo.title);
-                                    if (gParsed.volume !== null) titleText = gInfo.title;
-                                }
-                                if (!publisherText && gInfo.publisher) publisherText = gInfo.publisher;
+                            const gr = await fetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${cleanIsbn}`);
+                            const gd = await gr.json();
+                            const gi = gd.items?.[0]?.volumeInfo;
+                            if (gi) {
+                                if (!c && gi.imageLinks?.thumbnail) c = gi.imageLinks.thumbnail.replace(/^http:\/\//, 'https://');
+                                if (gi.authors?.length) a = gi.authors.join(', ');
+                                if (gi.title && !vol) { const gp = parseBookTitle(gi.title); if (gp.volume !== null) t = gi.title; }
+                                if (!p && gi.publisher) p = gi.publisher;
                             }
-                        } catch (gErr) { console.warn("Google Books fallback failed", gErr); }
+                        } catch (e) {}
 
-                        const parsed = parseBookTitle(titleText, onixVolume);
-                        const book = {
+                        const parsed = parseBookTitle(t, vol);
+                        onDetected({
                             fullTitle: parsed.full,
                             seriesName: parsed.series,
                             volume: parsed.volume,
-                            author: authorText,
-                            publisher: publisherText,
-                            isbn: summary.isbn,
-                            cover: coverUrl || '',
-                        };
-                        onDetected(book);
+                            author: a,
+                            publisher: p,
+                            isbn: s.isbn,
+                            cover: c || '',
+                        });
                         setManualIsbn('');
                     } else {
-                        alert(`データなし (ISBN: ${cleanIsbn})`);
+                        alert("データが見つかりませんでした");
                     }
                 } catch (e) {
-                    alert(`エラー: ${e.message}`);
+                    alert(e.message);
                 } finally {
                     setLoading(false);
                 }
             };
 
-            const handleManualSubmit = (e) => {
-                e.preventDefault();
-                if (manualIsbn) fetchBookData(manualIsbn);
-            };
-
             return (
-                <div className="flex flex-col items-center space-y-6">
-                    <div className="w-full">
-                        <div id="reader" className={`w-full bg-black rounded-lg overflow-hidden border-2 border-gray-300 relative ${scanning ? 'h-64' : 'h-12'}`}>
-                            {!scanning && <div className="absolute inset-0 flex items-center justify-center text-white bg-gray-800 text-sm">カメラ停止中</div>}
-                        </div>
-                        {!scanning ? (
-                            <button onClick={() => setScanning(true)} className="mt-2 bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-full shadow-lg w-full flex justify-center items-center">
-                                <span className="mr-2">📷</span> カメラ起動
-                            </button>
-                        ) : (
-                            <button onClick={stopScanner} className="mt-2 bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-6 rounded-full shadow w-full">停止</button>
+                <div className="flex flex-col items-center justify-center h-full space-y-8 animate-fade-in pt-8">
+                    {/* Camera Frame */}
+                    <div className="relative w-full max-w-xs aspect-square neu-flat flex flex-col items-center justify-center p-4 overflow-hidden group">
+                        <div id="reader" className={`w-full h-full rounded-2xl overflow-hidden bg-black/40 ${scanning ? 'opacity-100' : 'opacity-50'}`}></div>
+                        
+                        {!scanning && (
+                            <div className="absolute inset-0 flex items-center justify-center">
+                                <button onClick={() => setScanning(true)} className="neu-btn w-20 h-20 rounded-full text-2xl text-[var(--accent)] hover:scale-105 active:scale-95 transition-transform">
+                                    <ScanLine size={32} />
+                                </button>
+                            </div>
+                        )}
+                        
+                        {scanning && (
+                            <div className="absolute inset-0 pointer-events-none border-2 border-[var(--accent)]/50 rounded-2xl animate-pulse"></div>
                         )}
                     </div>
-                    <div className="w-full border-t pt-6">
-                        <h3 className="text-center font-bold text-gray-700 mb-3">ISBN手入力</h3>
-                        <form onSubmit={handleManualSubmit} className="flex gap-2">
-                            <input type="tel" value={manualIsbn} onChange={(e) => setManualIsbn(e.target.value)} placeholder="9784..." className="flex-grow p-3 border rounded" maxLength="13" />
-                            <button type="submit" disabled={loading} className="bg-green-600 text-white font-bold px-4 rounded shadow">{loading ? '...' : '検索'}</button>
-                        </form>
+
+                    {scanning && (
+                        <button onClick={stopScanner} className="neu-btn px-6 py-2 text-sm text-red-400 font-bold">
+                            STOP
+                        </button>
+                    )}
+
+                    {/* Manual Input */}
+                    <div className="w-full max-w-xs">
+                        <div className="neu-pressed flex items-center p-2 rounded-full">
+                            <input 
+                                type="tel" 
+                                placeholder="ISBN (978...)" 
+                                value={manualIsbn}
+                                onChange={e => setManualIsbn(e.target.value)}
+                                className="bg-transparent border-none outline-none text-[var(--text-main)] px-4 py-2 flex-grow font-mono text-lg placeholder-gray-600"
+                                maxLength="13"
+                            />
+                            <button 
+                                onClick={(e) => { e.preventDefault(); fetchBookData(manualIsbn); }}
+                                disabled={loading || manualIsbn.length < 10}
+                                className={`w-10 h-10 rounded-full flex items-center justify-center transition-all ${manualIsbn.length >= 10 ? 'bg-[var(--accent)] text-[#292d3e]' : 'text-gray-500'}`}
+                            >
+                                <Search size={18} />
+                            </button>
+                        </div>
                     </div>
-                    {loading && <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"><div className="bg-white p-4 rounded">情報を取得中...</div></div>}
+
+                    {loading && (
+                        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center">
+                            <div className="neu-flat p-8 flex flex-col items-center animate-pop">
+                                <div className="w-10 h-10 border-4 border-[var(--accent)] border-t-transparent rounded-full animate-spin mb-4"></div>
+                                <span className="font-bold tracking-widest text-sm">SEARCHING...</span>
+                            </div>
+                        </div>
+                    )}
                 </div>
             );
         }
 
-        // --- コンポーネント: 編集モーダル ---
-        function EditModal({ book, onClose, onSave }) {
-            const [formData, setFormData] = useState({ ...book });
-
-            const handleChange = (e) => {
-                const { name, value } = e.target;
-                setFormData(prev => ({
-                    ...prev,
-                    [name]: name === 'volume' ? (value ? parseInt(value, 10) : '') : value
-                }));
-            };
-
-            const handleSave = () => {
-                onSave(formData);
-                onClose();
-            };
-
-            const googleImageSearchUrl = `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(formData.fullTitle + ' ' + (formData.volume ? formData.volume + '巻' : '') + ' 表紙')}`;
-
-            return (
-                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-                    <div className="bg-white rounded-lg shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto">
-                        <div className="p-4 border-b flex justify-between items-center bg-gray-50 rounded-t-lg">
-                            <h3 className="font-bold text-lg">情報を編集</h3>
-                            <button onClick={onClose} className="text-gray-500 hover:text-gray-700 text-xl">&times;</button>
-                        </div>
-                        <div className="p-4 space-y-3">
-                            <div><label className="block text-xs font-bold text-gray-700 mb-1">作品名</label><input type="text" name="seriesName" value={formData.seriesName || ''} onChange={handleChange} className="w-full p-2 border rounded" /></div>
-                            <div className="flex gap-2">
-                                <div className="flex-grow"><label className="block text-xs font-bold text-gray-700 mb-1">巻数</label><input type="number" name="volume" value={formData.volume || ''} onChange={handleChange} className="w-full p-2 border rounded" /></div>
-                                <div className="flex-grow-[2]"><label className="block text-xs font-bold text-gray-700 mb-1">著者</label><input type="text" name="author" value={formData.author || ''} onChange={handleChange} className="w-full p-2 border rounded" /></div>
-                            </div>
-                            <div><label className="block text-xs font-bold text-gray-700 mb-1">正式タイトル</label><input type="text" name="fullTitle" value={formData.fullTitle || ''} onChange={handleChange} className="w-full p-2 border rounded" /></div>
-                            <div><label className="block text-xs font-bold text-gray-700 mb-1">出版社</label><input type="text" name="publisher" value={formData.publisher || ''} onChange={handleChange} className="w-full p-2 border rounded" /></div>
-                            <div>
-                                <label className="block text-xs font-bold text-gray-700 mb-1">画像URL (書影)</label>
-                                <div className="flex gap-2 mb-2">
-                                    <input type="text" name="cover" value={formData.cover || ''} onChange={handleChange} className="flex-grow p-2 border rounded text-xs" />
-                                    {formData.cover && <img src={formData.cover} className="h-8 w-6 object-cover border" alt="preview" />}
-                                </div>
-                                <a href={googleImageSearchUrl} target="_blank" className="text-xs text-blue-600 hover:underline">🔍 Google画像検索</a>
-                            </div>
-                        </div>
-                        <div className="p-4 border-t bg-gray-50 rounded-b-lg flex justify-end gap-2">
-                            <button onClick={onClose} className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded">キャンセル</button>
-                            <button onClick={handleSave} className="px-4 py-2 bg-blue-600 text-white font-bold rounded hover:bg-blue-700">保存</button>
-                        </div>
-                    </div>
-                </div>
-            );
-        }
-
-        // --- コンポーネント: BookList ---
-        function BookList({ books, settings, setBooks, onUpdate }) {
+        function HistoryView({ books, settings, setBooks, onUpdate }) {
             const [status, setStatus] = useState({});
-            const [isSendingAll, setIsSendingAll] = useState(false);
             const [editingBook, setEditingBook] = useState(null);
 
-            const sendToNotion = async (book, silent = false) => {
-                if (!settings.notionToken || !settings.databaseId) {
-                    if (!silent) alert("設定でトークンとIDを入力してください。");
-                    return false;
-                }
-
-                setStatus(prev => ({ ...prev, [book.isbn]: 'loading' }));
-
-                let secureCoverUrl = null;
-                if (book.cover && book.cover.trim()) {
-                     secureCoverUrl = book.cover.trim().replace(/^http:\/\//i, 'https://');
-                     if (secureCoverUrl.includes('books.google.com') || secureCoverUrl.includes('googleapis.com')) {
-                         secureCoverUrl = secureCoverUrl.replace('&edge=curl', '');
-                     }
-                }
+            const send = async (book) => {
+                if(!settings.notionToken) { alert("設定が必要です"); return; }
+                setStatus(p => ({...p, [book.isbn]: 'loading'}));
                 
-                const safeText = (text) => text && String(text).trim().length > 0 ? String(text) : "-";
+                // data prep
+                let cover = book.cover?.trim() || "";
+                if(cover) {
+                    cover = cover.replace(/^http:\/\//i, 'https://');
+                    if(cover.includes('books.google') || cover.includes('googleapis')) cover = cover.replace('&edge=curl','');
+                }
+                const safe = t => t && String(t).trim().length > 0 ? String(t) : "-";
 
-                const payload = {
+                const body = {
                     parent: { database_id: settings.databaseId },
-                    cover: secureCoverUrl ? { type: "external", external: { url: secureCoverUrl } } : null,
+                    cover: cover ? { type: "external", external: { url: cover } } : null,
                     properties: {
-                        "名前": { title: [{ text: { content: safeText(book.fullTitle) } }] },
-                        "作品名": { rich_text: [{ text: { content: safeText(book.seriesName) } }] },
-                        ...(book.volume !== null && book.volume !== "" ? { "巻数": { number: parseInt(book.volume, 10) } } : {}),
-                        "著作者": { rich_text: [{ text: { content: safeText(book.author) } }] },
-                        "出版社": { rich_text: [{ text: { content: safeText(book.publisher) } }] },
-                        "ISBN": { rich_text: [{ text: { content: safeText(book.isbn) } }] },
-                        ...(secureCoverUrl ? {
-                            "書影URL": { url: secureCoverUrl },
-                            "書影": {
-                                "files": [
-                                    {
-                                        "name": safeText(book.fullTitle),
-                                        "type": "external",
-                                        "external": { "url": secureCoverUrl }
-                                    }
-                                ]
-                            }
+                        "名前": { title: [{ text: { content: safe(book.fullTitle) } }] },
+                        "作品名": { rich_text: [{ text: { content: safe(book.seriesName) } }] },
+                        ...(book.volume ? { "巻数": { number: parseInt(book.volume) } } : {}),
+                        "著作者": { rich_text: [{ text: { content: safe(book.author) } }] },
+                        "出版社": { rich_text: [{ text: { content: safe(book.publisher) } }] },
+                        "ISBN": { rich_text: [{ text: { content: safe(book.isbn) } }] },
+                        ...(cover ? {
+                            "書影URL": { url: cover },
+                            "書影": { files: [{ name: safe(book.fullTitle), type: "external", external: { url: cover } }] }
                         } : {})
                     }
                 };
 
                 try {
-                    let proxy = settings.proxyUrl || '';
-                    const targetUrl = "https://api.notion.com/v1/pages";
-                    const finalUrl = proxy.includes('corsproxy.io') 
-                        ? proxy + encodeURIComponent(targetUrl)
-                        : proxy + targetUrl;
-
-                    const response = await fetch(finalUrl, {
+                    let proxy = settings.proxyUrl;
+                    const target = "https://api.notion.com/v1/pages";
+                    const url = proxy.includes('corsproxy.io') ? proxy + encodeURIComponent(target) : proxy + target;
+                    
+                    const res = await fetch(url, {
                         method: "POST",
-                        headers: {
-                            "Authorization": `Bearer ${settings.notionToken}`,
-                            "Content-Type": "application/json",
-                            "Notion-Version": "2022-06-28"
-                        },
-                        body: JSON.stringify(payload)
+                        headers: { "Authorization": `Bearer ${settings.notionToken}`, "Content-Type": "application/json", "Notion-Version": "2022-06-28" },
+                        body: JSON.stringify(body)
                     });
 
-                    if (response.ok) {
-                        setBooks(prevBooks => prevBooks.filter(b => b.isbn !== book.isbn));
-                        setStatus(prev => {
-                            const newStatus = { ...prev };
-                            delete newStatus[book.isbn];
-                            return newStatus;
-                        });
-                        return true;
+                    if(res.ok) {
+                        setBooks(prev => prev.filter(b => b.isbn !== book.isbn));
+                        setStatus(p => { const n = {...p}; delete n[book.isbn]; return n; });
                     } else {
-                        const errorObj = await response.json().catch(() => ({}));
-                        const errorMsg = errorObj.message || await response.text();
-                        console.error("Notion API Error:", errorObj);
-                        throw new Error(`[${response.status}] ${errorMsg}`);
+                        const err = await res.text();
+                        throw new Error(err);
                     }
-                } catch (error) {
-                    console.error(error);
-                    setStatus(prev => ({ ...prev, [book.isbn]: 'error' }));
-                    
-                    if (!silent) {
-                        let msg = "送信エラーが発生しました。";
-                        if (error.message.includes("400")) {
-                            msg = "【設定エラー】Notionのプロパティ設定を確認してください。\n・「書影URL」の種類は「URL」になっていますか？\n・「巻数」の種類は「数値」になっていますか？\n・「書影」の種類は「ファイルとメディア」ですか？";
-                        } else if (error.message.includes("Network") || error.message.includes("Failed to fetch")) {
-                            msg = "【通信エラー】Proxyサーバーに接続できませんでした。\n設定(⚙️)から「Proxy B」に切り替え、許可ボタンを押してから再試行してください。";
-                        } else if (error.message.includes("401") || error.message.includes("403")) {
-                            msg = "【認証エラー】APIトークンが間違っているか、データベースへのコネクトが許可されていません。";
-                        }
-                        alert(msg + "\n\n詳細: " + error.message);
-                    }
-                    return false;
+                } catch(e) {
+                    console.error(e);
+                    setStatus(p => ({...p, [book.isbn]: 'error'}));
+                    alert("送信エラー: " + e.message);
                 }
             };
 
             const sendAll = async () => {
-                if (books.length === 0) {
-                    alert("リストは空です。");
-                    return;
-                }
-                if (!confirm(`${books.length}冊のデータをNotionに送信しますか？`)) return;
-
-                setIsSendingAll(true);
-                let successCount = 0;
-                let failCount = 0;
-                
+                if(!books.length || !confirm(`${books.length}冊送信しますか？`)) return;
                 const targets = [...books];
-
-                for (const book of targets) {
-                    await new Promise(resolve => setTimeout(resolve, 1000));
-                    const result = await sendToNotion(book, true);
-                    if (result) successCount++;
-                    else failCount++;
+                for(const b of targets) {
+                    await new Promise(r => setTimeout(r, 1000));
+                    await send(b);
                 }
-
-                setIsSendingAll(false);
-                alert(`完了\n成功: ${successCount}件\n失敗: ${failCount}件\n\n失敗した場合はProxyを切り替えてみてください。`);
+                alert("完了");
             };
 
-            const copyAll = () => {
-                const text = books.map(b => `${b.fullTitle}\t${b.seriesName}\t${b.volume || ''}\t${b.author}\t${b.publisher}\t${b.isbn}`).join('\n');
-                navigator.clipboard.writeText(text);
-                alert("コピー完了");
-            };
-
-            const downloadCSV = () => {
-                const header = "名前,作品名,巻数,著作者,出版社,ISBN\n";
-                const rows = books.map(b => 
-                    `"${b.fullTitle}","${b.seriesName}",${b.volume || ''},"${b.author}","${b.publisher}","${b.isbn}"`
-                ).join('\n');
-                const blob = new Blob([new Uint8Array([0xEF, 0xBB, 0xBF]), header + rows], { type: 'text/csv' });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `manga_list_${new Date().toISOString().slice(0,10)}.csv`;
-                a.click();
-            };
-
-            const removeBook = (isbn) => {
-                if(confirm('削除しますか？')) setBooks(books.filter(b => b.isbn !== isbn));
-            };
-
-            if (books.length === 0) return <div className="text-center text-gray-500 py-10">リストは空です</div>;
+            if (books.length === 0) return <div className="h-full flex flex-col items-center justify-center text-[var(--text-sub)] opacity-50"><div className="text-6xl mb-4">📭</div><p>NO BOOKS</p></div>;
 
             return (
-                <div className="space-y-4">
-                    <div className="flex flex-wrap justify-end gap-2 mb-2">
-                        <button 
-                            onClick={sendAll} 
-                            disabled={isSendingAll}
-                            className={`text-sm px-3 py-1 rounded text-white font-bold border ${isSendingAll ? 'bg-gray-400' : 'bg-blue-600 hover:bg-blue-700 border-blue-800'}`}
-                        >
-                            {isSendingAll ? '送信中...' : '🚀 一括送信'}
-                        </button>
-                        <button onClick={downloadCSV} className="text-sm bg-green-100 hover:bg-green-200 px-3 py-1 rounded text-green-800 border border-green-300">
-                            📥 CSV保存
-                        </button>
-                        <button onClick={copyAll} className="text-sm bg-gray-200 hover:bg-gray-300 px-3 py-1 rounded text-gray-700 border border-gray-300">
-                            📋 コピー
+                <div className="space-y-6 pt-4 animate-slide-up">
+                    <div className="flex justify-between items-center px-2">
+                        <span className="text-sm font-bold text-[var(--text-sub)]">{books.length} BOOKS</span>
+                        <button onClick={sendAll} className="neu-btn px-4 py-2 text-xs font-bold text-[var(--accent)] hover:text-white">
+                            ALL SEND
                         </button>
                     </div>
-                    {books.map((book, idx) => (
-                        <div key={idx} className="bg-white border rounded-lg p-3 flex shadow-sm items-start relative">
-                            {book.cover ? <img src={book.cover} className="w-16 h-24 object-cover rounded mr-3 bg-gray-200" /> : <div className="w-16 h-24 bg-gray-200 rounded mr-3 flex items-center justify-center text-xs">No Img</div>}
-                            <div className="flex-grow">
-                                <h3 className="font-bold text-sm">{book.fullTitle}</h3>
-                                <div className="flex items-center text-xs text-blue-600 mb-1 space-x-2">
-                                    <span className="bg-blue-50 px-1 rounded">作品: {book.seriesName}</span>
-                                    {book.volume !== null && book.volume !== "" && <span className="bg-blue-50 px-1 rounded">巻: {book.volume}</span>}
+
+                    <div className="grid gap-4">
+                        {books.map((book) => (
+                            <div key={book.isbn} className="neu-flat p-4 flex gap-4 relative overflow-hidden group">
+                                {/* Cover */}
+                                <div className="w-20 h-28 flex-shrink-0 rounded-lg overflow-hidden shadow-lg bg-[#202330] relative">
+                                    {book.cover ? <img src={book.cover} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-xs text-gray-600 font-bold">NO IMG</div>}
                                 </div>
-                                <p className="text-xs text-gray-600 mb-2">{book.author}</p>
-                                <div className="flex space-x-2">
-                                    <button onClick={() => sendToNotion(book)} disabled={status[book.isbn] === 'success'} className={`text-xs px-3 py-1 rounded text-white ${status[book.isbn] === 'success' ? 'bg-green-500' : status[book.isbn] === 'error' ? 'bg-red-500' : 'bg-blue-600'}`}>
-                                        {status[book.isbn] === 'success' ? '送信済' : 'Notionへ送信'}
-                                    </button>
-                                    <button onClick={() => setEditingBook(book)} className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 px-2 py-1 rounded border">編集</button>
-                                    <button onClick={() => removeBook(book.isbn)} className="text-xs text-red-400 p-1">削除</button>
+                                
+                                {/* Info */}
+                                <div className="flex-grow min-w-0 flex flex-col justify-between">
+                                    <div>
+                                        <div className="flex justify-between items-start">
+                                            <h3 className="font-bold text-sm leading-tight line-clamp-2">{book.fullTitle}</h3>
+                                            <button onClick={() => {if(confirm('削除?')) setBooks(books.filter(b=>b.isbn!==book.isbn))}} className="text-[var(--text-sub)] hover:text-red-400"><X size={16}/></button>
+                                        </div>
+                                        <div className="flex flex-wrap gap-2 mt-2">
+                                            <span className="text-[10px] bg-[#202330] px-2 py-1 rounded text-[var(--accent)] border border-[var(--accent)]/20">{book.seriesName}</span>
+                                            {book.volume && <span className="text-[10px] bg-[#202330] px-2 py-1 rounded text-white border border-white/10">{book.volume}</span>}
+                                        </div>
+                                        <p className="text-xs text-[var(--text-sub)] mt-1 truncate">{book.author}</p>
+                                    </div>
+                                    
+                                    <div className="flex gap-3 mt-2 justify-end">
+                                        <button onClick={() => setEditingBook(book)} className="p-2 rounded-full neu-btn text-[var(--text-sub)] hover:text-white">
+                                            <Edit2 size={14} />
+                                        </button>
+                                        <button onClick={() => send(book)} disabled={status[book.isbn]==='loading'} className={`px-4 py-1.5 rounded-full neu-btn text-xs font-bold ${status[book.isbn]==='error' ? 'text-red-400' : 'text-[var(--accent)]'}`}>
+                                            {status[book.isbn]==='loading' ? '...' : status[book.isbn]==='error' ? 'RETRY' : 'SEND'}
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
-                        </div>
-                    ))}
-                    {editingBook && <EditModal book={editingBook} onClose={() => setEditingBook(null)} onSave={onUpdate} />}
+                        ))}
+                    </div>
+                    {editingBook && <EditDrawer book={editingBook} onClose={() => setEditingBook(null)} onSave={onUpdate} />}
                 </div>
             );
         }
 
-        // --- コンポーネント: Settings ---
-        function Settings({ settings, setSettings }) {
-            const [testStatus, setTestStatus] = useState(null); // null, 'testing', 'success', 'error'
+        // --- Drawer (Edit) ---
+        function EditDrawer({ book, onClose, onSave }) {
+            const [data, setData] = useState({ ...book });
+            const handleChange = (e) => setData({ ...data, [e.target.name]: e.target.name==='volume' && e.target.value ? parseInt(e.target.value) : e.target.value });
 
-            const handleChange = (e) => {
-                const { name, value } = e.target;
-                setSettings({ ...settings, [name]: value });
-                localStorage.setItem('manga_scanner_settings', JSON.stringify({ ...settings, [name]: value }));
-                setTestStatus(null);
-            };
+            return (
+                <div className="fixed inset-0 z-50 flex items-end justify-center pointer-events-none">
+                    <div className="absolute inset-0 bg-black/60 backdrop-blur-sm pointer-events-auto" onClick={onClose}></div>
+                    <div className="neu-flat w-full max-w-md bg-[var(--bg-color)] rounded-t-3xl p-6 pointer-events-auto animate-slide-up relative max-h-[85vh] overflow-y-auto">
+                        <div className="w-12 h-1.5 bg-gray-600 rounded-full mx-auto mb-6 opacity-30"></div>
+                        
+                        <div className="space-y-5">
+                            <h2 className="text-lg font-bold text-[var(--text-main)] mb-4 flex items-center gap-2"><Edit2 size={18}/> 編集</h2>
+                            
+                            <Input label="シリーズ名" name="seriesName" value={data.seriesName} onChange={handleChange} />
+                            <div className="flex gap-4">
+                                <div className="w-1/3"><Input label="巻数" type="number" name="volume" value={data.volume} onChange={handleChange} /></div>
+                                <div className="w-2/3"><Input label="著者" name="author" value={data.author} onChange={handleChange} /></div>
+                            </div>
+                            <Input label="正式タイトル" name="fullTitle" value={data.fullTitle} onChange={handleChange} />
+                            
+                            <div>
+                                <label className="text-xs font-bold text-[var(--text-sub)] ml-1 mb-1 block">画像URL</label>
+                                <div className="neu-pressed rounded-xl p-1 flex items-center">
+                                    <input type="text" name="cover" value={data.cover||''} onChange={handleChange} className="bg-transparent w-full p-2 text-sm outline-none text-[var(--text-main)]" placeholder="https://..." />
+                                    {data.cover && <img src={data.cover} className="h-8 w-6 object-cover rounded ml-2" />}
+                                </div>
+                                <a href={`https://www.google.com/search?tbm=isch&q=${encodeURIComponent(data.fullTitle + ' ' + (data.volume||'') + ' 表紙')}`} target="_blank" className="text-[10px] text-[var(--accent)] mt-1 ml-1 flex items-center gap-1"><Search size={10}/> 画像検索</a>
+                            </div>
+
+                            <button onClick={() => { onSave(data); onClose(); }} className="w-full neu-btn py-3 mt-4 text-[var(--accent)] font-bold text-sm">
+                                保存する
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        const Input = ({ label, name, value, onChange, type="text" }) => (
+            <div>
+                <label className="text-xs font-bold text-[var(--text-sub)] ml-1 mb-1 block">{label}</label>
+                <div className="neu-pressed rounded-xl p-1">
+                    <input type={type} name={name} value={value||''} onChange={onChange} className="bg-transparent w-full p-2 text-sm outline-none text-[var(--text-main)]" />
+                </div>
+            </div>
+        );
+
+        function SettingsView({ settings, setSettings }) {
+            const [test, setTest] = useState(null);
+            const handleChange = (e) => setSettings({...settings, [e.target.name]: e.target.value});
             
-            const setProxy = (url) => {
-                const newSettings = { ...settings, proxyUrl: url };
-                setSettings(newSettings);
-                localStorage.setItem('manga_scanner_settings', JSON.stringify(newSettings));
-                setTestStatus(null);
-            };
-
-            const testConnection = async () => {
-                setTestStatus('testing');
+            const runTest = async () => {
+                setTest('testing');
                 try {
-                    const proxy = settings.proxyUrl;
-                    const testTarget = "https://httpbin.org/get";
-                    // corsproxy.ioなどはターゲットURLをエンコードする
-                    const testUrl = proxy.includes('corsproxy.io') 
-                        ? proxy + encodeURIComponent(testTarget)
-                        : proxy + testTarget;
-
-                    const res = await fetch(testUrl);
-                    if (res.ok) {
-                        setTestStatus('success');
-                    } else if (res.status === 403) {
-                        throw new Error('許可が必要です');
-                    } else {
-                        throw new Error(res.statusText);
-                    }
-                } catch (e) {
-                    console.error(e);
-                    setTestStatus('error');
-                }
+                    const p = settings.proxyUrl;
+                    const u = p.includes('corsproxy.io') ? p + encodeURIComponent('https://httpbin.org/get') : p + 'https://httpbin.org/get';
+                    const r = await fetch(u);
+                    if(r.ok) setTest('ok'); else if(r.status===403) setTest('403'); else throw new Error();
+                } catch(e) { setTest('err'); }
             };
 
             return (
-                <div className="space-y-4 pb-10">
-                    <h2 className="font-bold text-xl mb-4">設定</h2>
-                    <div><label className="block text-sm">Notion Integration Token</label><input type="password" name="notionToken" value={settings.notionToken} onChange={handleChange} className="w-full p-2 border rounded" /></div>
-                    <div><label className="block text-sm">Database ID</label><input type="text" name="databaseId" value={settings.databaseId} onChange={handleChange} className="w-full p-2 border rounded" /></div>
-                    
-                    <div>
-                        <label className="block text-sm">CORS Proxy URL</label>
-                        <input type="text" name="proxyUrl" value={settings.proxyUrl} onChange={handleChange} className="w-full p-2 border rounded mb-2" />
+                <div className="space-y-6 pt-4 animate-slide-up">
+                    <div className="neu-flat p-5 space-y-4">
+                        <h3 className="font-bold text-[var(--accent)] flex items-center gap-2"><Settings size={18}/> Notion設定</h3>
+                        <Input label="API Token" name="notionToken" value={settings.notionToken} onChange={handleChange} type="password" />
+                        <Input label="Database ID" name="databaseId" value={settings.databaseId} onChange={handleChange} />
+                    </div>
+
+                    <div className="neu-flat p-5 space-y-4">
+                        <h3 className="font-bold text-[var(--accent)] flex items-center gap-2">🌐 通信設定</h3>
+                        <Input label="Proxy URL" name="proxyUrl" value={settings.proxyUrl} onChange={handleChange} />
                         
-                        <div className="flex gap-2 text-xs mb-4">
-                            <button onClick={() => setProxy('https://corsproxy.io/?')} className={`px-2 py-1 rounded border ${settings.proxyUrl.includes('corsproxy.io') ? 'bg-blue-600 text-white' : 'bg-gray-100 hover:bg-gray-200'}`}>Proxy A (登録不要)</button>
-                            <button onClick={() => setProxy('https://cors-anywhere.herokuapp.com/')} className={`px-2 py-1 rounded border ${settings.proxyUrl.includes('cors-anywhere') ? 'bg-blue-600 text-white' : 'bg-gray-100 hover:bg-gray-200'}`}>Proxy B (要許可)</button>
+                        <div className="grid grid-cols-2 gap-3 pt-2">
+                            <button onClick={()=>setSettings({...settings, proxyUrl: 'https://corsproxy.io/?'})} className={`neu-btn py-2 text-xs font-bold ${settings.proxyUrl.includes('corsproxy.io') ? 'text-[var(--accent)]' : 'text-[var(--text-sub)]'}`}>Proxy A (登録不要)</button>
+                            <button onClick={()=>setSettings({...settings, proxyUrl: 'https://cors-anywhere.herokuapp.com/'})} className={`neu-btn py-2 text-xs font-bold ${settings.proxyUrl.includes('cors-anywhere') ? 'text-[var(--accent)]' : 'text-[var(--text-sub)]'}`}>Proxy B (要許可)</button>
                         </div>
-                        
-                        {/* 接続テストエリア */}
-                        <div className="p-3 bg-gray-50 rounded border border-gray-200">
-                            <div className="flex justify-between items-center mb-2">
-                                <span className="text-sm font-bold text-gray-700">通信状態チェック</span>
-                                <button onClick={testConnection} disabled={testStatus === 'testing'} className="text-xs bg-white border border-blue-300 text-blue-600 px-3 py-1 rounded hover:bg-blue-50">
-                                    {testStatus === 'testing' ? '確認中...' : '📡 接続テスト'}
-                                </button>
+
+                        <div className="pt-2">
+                            <div className="flex justify-between items-center bg-[#202330] p-3 rounded-lg border border-white/5">
+                                <span className="text-xs font-bold">接続テスト</span>
+                                <button onClick={runTest} className="neu-btn px-3 py-1 text-xs">{test==='testing' ? '...' : '実行'}</button>
                             </div>
-                            
-                            {testStatus === 'success' && (
-                                <div className="text-xs text-green-700 bg-green-50 p-2 rounded border border-green-200">
-                                    ✅ <strong>接続OK！</strong><br/>この設定でNotionへ送信可能です。
-                                </div>
-                            )}
-                            
-                            {testStatus === 'error' && (
-                                <div className="text-xs text-red-700 bg-red-50 p-2 rounded border border-red-200">
-                                    ❌ <strong>接続失敗</strong>
-                                    {settings.proxyUrl.includes('cors-anywhere') ? (
-                                        <div className="mt-1 ml-1">
-                                            <p className="mb-1">「Proxy B」は使用前に許可が必要です：</p>
-                                            <ol className="list-decimal list-inside space-y-1">
-                                                <li><a href="https://cors-anywhere.herokuapp.com/corsdemo" target="_blank" className="underline text-blue-600 font-bold">許可ページを開く</a></li>
-                                                <li>"Request temporary access" ボタンを押す</li>
-                                                <li>
-                                                    <span className="font-bold bg-yellow-100">※ボタンを押しても画面が変わらない場合でも許可されている事があります。</span>
-                                                    <br/>アプリに戻って再度「接続テスト」を試してください。
-                                                </li>
-                                            </ol>
-                                        </div>
-                                    ) : (
-                                        <p className="mt-1">Proxy Aが混雑している可能性があります。「Proxy B」に切り替えて試してください。</p>
-                                    )}
-                                </div>
-                            )}
-                            
-                            {testStatus === null && <p className="text-xs text-gray-500">上のボタンを押して接続確認してください。</p>}
+                            {test==='ok' && <p className="text-xs text-green-400 mt-2 text-center">✅ 接続OK</p>}
+                            {test==='403' && <p className="text-xs text-red-400 mt-2 text-center">❌ <a href="https://cors-anywhere.herokuapp.com/corsdemo" target="_blank" className="underline">許可ボタンを押してください</a></p>}
+                            {test==='err' && <p className="text-xs text-red-400 mt-2 text-center">❌ エラー (Proxyを変更してください)</p>}
                         </div>
                     </div>
                 </div>
