@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Notion Manga Scanner v4.5</title>
+    <title>Notion Manga Scanner v4.6</title>
     <!-- React & ReactDOM -->
     <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
@@ -25,23 +25,42 @@
     <script type="text/babel">
         const { useState, useEffect, useRef } = React;
 
-        // --- ユーティリティ: タイトル解析 ---
-        const parseBookTitle = (rawTitle) => {
-            // 例: "ONE PIECE 100", "進撃の巨人(34)"
-            const regex = /^(.+?)\s*[\(（]?\s*(\d+)[\)）]?$/;
-            const match = rawTitle.match(regex);
+        // --- ユーティリティ: タイトル解析 (v4.6 強化版) ---
+        const parseBookTitle = (rawTitle, onixVolume = null) => {
+            // 1. 全角英数字を半角に変換
+            const title = rawTitle.replace(/[！-～]/g, s => String.fromCharCode(s.charCodeAt(0) - 0xFEE0));
+            
+            // 2. 巻数抽出の正規表現強化
+            // パターン: タイトル + (スペース等) + (第)? + 数字 + (巻)? + (カッコ)?
+            // 例: "ONE PIECE 100", "進撃の巨人(34)", "タイトル １０", "タイトル 第10巻"
+            const regex = /^(.+?)\s*[\(（\[]?\s*(?:第|v|vol\.?)?(\d+)(?:巻)?[\)）\]]?$/i;
+            const match = title.match(regex);
+
+            let seriesName = rawTitle;
+            let volume = null;
+
             if (match) {
-                return { full: rawTitle, series: match[1].trim(), volume: parseInt(match[2], 10) };
-            } else {
-                return { full: rawTitle, series: rawTitle, volume: null };
+                seriesName = match[1].trim();
+                volume = parseInt(match[2], 10);
+            } else if (onixVolume) {
+                // 正規表現で取れなくても、ONIXデータに巻数があればそれを使う
+                // タイトルから巻数っぽい部分を除去するのは難しいので、タイトルはそのままにするか、
+                // あるいはシリーズ名としてそのまま使う
+                seriesName = rawTitle;
+                volume = parseInt(onixVolume, 10);
             }
+
+            return { 
+                full: rawTitle, 
+                series: seriesName, 
+                volume: volume 
+            };
         };
 
         // --- コンポーネント: アプリ本体 ---
         function App() {
             const [view, setView] = useState('scan');
             const [scannedBooks, setScannedBooks] = useState([]);
-            // v4.3: デフォルトはProxy Aだが、設定画面での切り替えを推奨
             const [settings, setSettings] = useState({
                 notionToken: '',
                 databaseId: '',
@@ -77,7 +96,7 @@
             return (
                 <div className="max-w-md mx-auto min-h-screen bg-white shadow-lg flex flex-col">
                     <header className="bg-gray-800 text-white p-4 flex justify-between items-center sticky top-0 z-50">
-                        <h1 className="font-bold text-lg">📚 Scanner v4.5</h1>
+                        <h1 className="font-bold text-lg">📚 Scanner v4.6</h1>
                         <div className="space-x-2">
                             <button onClick={() => setView('scan')} className={`px-3 py-1 rounded ${view === 'scan' ? 'bg-blue-600' : 'bg-gray-700'}`}>Scan</button>
                             <button onClick={() => setView('history')} className={`px-3 py-1 rounded ${view === 'history' ? 'bg-blue-600' : 'bg-gray-700'}`}>List ({scannedBooks.length})</button>
@@ -155,21 +174,37 @@
                     
                     if (data && data[0]) {
                         const summary = data[0].summary;
-                        const parsed = parseBookTitle(summary.title);
+                        const onix = data[0].onix;
+
+                        // ONIXデータから巻数情報を探す (PartNumber)
+                        let onixVolume = null;
+                        try {
+                             if (onix && onix.DescriptiveDetail && onix.DescriptiveDetail.TitleDetail && onix.DescriptiveDetail.TitleDetail.TitleElement) {
+                                 const elements = Array.isArray(onix.DescriptiveDetail.TitleDetail.TitleElement) 
+                                     ? onix.DescriptiveDetail.TitleDetail.TitleElement 
+                                     : [onix.DescriptiveDetail.TitleDetail.TitleElement];
+                                 
+                                 const partNumEl = elements.find(el => el.PartNumber);
+                                 if (partNumEl) {
+                                     onixVolume = partNumEl.PartNumber;
+                                 }
+                             }
+                        } catch (err) {
+                            console.log("ONIX parse error", err);
+                        }
+
+                        const parsed = parseBookTitle(summary.title, onixVolume);
                         
-                        // 画像URL取得ロジック強化: OpenBDになければGoogle Booksを試す
+                        // 画像URL取得ロジック強化
                         let coverUrl = summary.cover;
                         if (!coverUrl) {
                             try {
-                                console.log("OpenBDに画像がないためGoogle Booksを検索します...");
                                 const gRes = await fetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${cleanIsbn}`);
                                 const gData = await gRes.json();
                                 if (gData.items && gData.items.length > 0) {
                                     const gInfo = gData.items[0].volumeInfo;
                                     if (gInfo.imageLinks && gInfo.imageLinks.thumbnail) {
-                                        coverUrl = gInfo.imageLinks.thumbnail;
-                                        // httpをhttpsに置換
-                                        coverUrl = coverUrl.replace(/^http:\/\//, 'https://');
+                                        coverUrl = gInfo.imageLinks.thumbnail.replace(/^http:\/\//, 'https://');
                                     }
                                 }
                             } catch (gErr) {
@@ -184,7 +219,7 @@
                             author: summary.author,
                             publisher: summary.publisher,
                             isbn: summary.isbn,
-                            cover: coverUrl || '', // 取得したURLを使用
+                            cover: coverUrl || '',
                         };
                         onDetected(book);
                         setManualIsbn('');
@@ -242,25 +277,19 @@
 
                 setStatus(prev => ({ ...prev, [book.isbn]: 'loading' }));
 
-                // 画像URLをHTTPSに統一（httpだとNotionが拒否する場合がある）
                 const secureCoverUrl = book.cover ? book.cover.replace(/^http:\/\//i, 'https://') : null;
-
-                // データのサニタイズ (Notionは空文字を送るとエラーになることがあるため)
                 const safeText = (text) => text && text.trim().length > 0 ? text : "-";
 
                 const payload = {
                     parent: { database_id: settings.databaseId },
-                    // カバー画像
                     cover: secureCoverUrl ? { type: "external", external: { url: secureCoverUrl } } : null,
                     properties: {
                         "名前": { title: [{ text: { content: safeText(book.fullTitle) } }] },
                         "作品名": { rich_text: [{ text: { content: safeText(book.seriesName) } }] },
-                        // 巻数は数値型なので、nullの場合は送信しない（プロパティ自体を含めない）
                         ...(book.volume !== null ? { "巻数": { number: book.volume } } : {}),
                         "著作者": { rich_text: [{ text: { content: safeText(book.author) } }] },
                         "出版社": { rich_text: [{ text: { content: safeText(book.publisher) } }] },
                         "ISBN": { rich_text: [{ text: { content: safeText(book.isbn) } }] },
-                        // 【追加】「書影」プロパティ
                         ...(secureCoverUrl ? {
                             "書影": {
                                 "files": [
@@ -297,10 +326,8 @@
                         setStatus(prev => ({ ...prev, [book.isbn]: 'success' }));
                         return true;
                     } else {
-                        // v4.3: 詳細なエラーメッセージを取得
                         const errorObj = await response.json().catch(() => ({}));
                         const errorMsg = errorObj.message || await response.text();
-                        // ログにも出す
                         console.error("Notion API Error Detail:", errorObj);
                         throw new Error(`[${response.status}] ${errorMsg}`);
                     }
@@ -314,15 +341,12 @@
                 }
             };
 
-            // 一括送信機能
             const sendAll = async () => {
                 const targetBooks = books.filter(b => status[b.isbn] !== 'success');
-                
                 if (targetBooks.length === 0) {
                     alert("未送信の本はありません。");
                     return;
                 }
-                
                 if (!confirm(`${targetBooks.length}冊のデータをNotionに送信しますか？\n※API制限回避のため1秒間隔で送信します。`)) return;
 
                 setIsSendingAll(true);
