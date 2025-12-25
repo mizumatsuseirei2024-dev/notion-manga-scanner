@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Notion Manga Scanner v4.3</title>
+    <title>Notion Manga Scanner v4.4</title>
     <!-- React & ReactDOM -->
     <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
@@ -76,7 +76,7 @@
             return (
                 <div className="max-w-md mx-auto min-h-screen bg-white shadow-lg flex flex-col">
                     <header className="bg-gray-800 text-white p-4 flex justify-between items-center sticky top-0 z-50">
-                        <h1 className="font-bold text-lg">📚 Scanner v4.3</h1>
+                        <h1 className="font-bold text-lg">📚 Scanner v4.4</h1>
                         <div className="space-x-2">
                             <button onClick={() => setView('scan')} className={`px-3 py-1 rounded ${view === 'scan' ? 'bg-blue-600' : 'bg-gray-700'}`}>Scan</button>
                             <button onClick={() => setView('history')} className={`px-3 py-1 rounded ${view === 'history' ? 'bg-blue-600' : 'bg-gray-700'}`}>List ({scannedBooks.length})</button>
@@ -148,12 +148,34 @@
                     const cleanIsbn = isbn.replace(/[^0-9]/g, '');
                     if (cleanIsbn.length !== 13) throw new Error("ISBNは13桁必要です");
 
+                    // 1. OpenBDで検索
                     const res = await fetch(`https://api.openbd.jp/v1/get?isbn=${cleanIsbn}`);
                     const data = await res.json();
                     
                     if (data && data[0]) {
                         const summary = data[0].summary;
                         const parsed = parseBookTitle(summary.title);
+                        
+                        // 画像URL取得ロジック強化: OpenBDになければGoogle Booksを試す
+                        let coverUrl = summary.cover;
+                        if (!coverUrl) {
+                            try {
+                                console.log("OpenBDに画像がないためGoogle Booksを検索します...");
+                                const gRes = await fetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${cleanIsbn}`);
+                                const gData = await gRes.json();
+                                if (gData.items && gData.items.length > 0) {
+                                    const gInfo = gData.items[0].volumeInfo;
+                                    if (gInfo.imageLinks && gInfo.imageLinks.thumbnail) {
+                                        coverUrl = gInfo.imageLinks.thumbnail;
+                                        // httpをhttpsに置換
+                                        coverUrl = coverUrl.replace(/^http:\/\//, 'https://');
+                                    }
+                                }
+                            } catch (gErr) {
+                                console.warn("Google Books fallback failed", gErr);
+                            }
+                        }
+
                         const book = {
                             fullTitle: parsed.full,
                             seriesName: parsed.series,
@@ -161,7 +183,7 @@
                             author: summary.author,
                             publisher: summary.publisher,
                             isbn: summary.isbn,
-                            cover: summary.cover || '',
+                            cover: coverUrl || '', // 取得したURLを使用
                         };
                         onDetected(book);
                         setManualIsbn('');
