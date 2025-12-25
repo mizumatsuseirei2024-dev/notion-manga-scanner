@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Notion Manga Scanner v4.7</title>
+    <title>Notion Manga Scanner v4.8</title>
     <!-- React & ReactDOM -->
     <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
@@ -25,27 +25,44 @@
     <script type="text/babel">
         const { useState, useEffect, useRef } = React;
 
-        // --- ユーティリティ: タイトル解析 (v4.7 強化版) ---
+        // --- ユーティリティ: タイトル解析 (v4.8 強化版) ---
         const parseBookTitle = (rawTitle, onixVolume = null) => {
             if (!rawTitle) return { full: "", series: "", volume: null };
 
-            // 1. 全角英数字を半角に変換
-            const title = rawTitle.replace(/[！-～]/g, s => String.fromCharCode(s.charCodeAt(0) - 0xFEE0));
-            
-            // 2. 巻数抽出の正規表現
-            // パターン: タイトル + (スペース等) + (第)? + 数字 + (巻)? + (カッコ)?
-            const regex = /^(.+?)\s*[\(（\[]?\s*(?:第|v|vol\.?)?(\d+)(?:巻)?[\)）\]]?$/i;
-            const match = title.match(regex);
+            // 1. 全角英数字を半角に変換 & トリム
+            let title = rawTitle.replace(/[！-～]/g, s => String.fromCharCode(s.charCodeAt(0) - 0xFEE0)).trim();
+            // 連続するスペースを1つに
+            title = title.replace(/\s+/g, ' ');
 
-            let seriesName = rawTitle;
+            let seriesName = title;
             let volume = null;
+
+            // ONIXデータ（確実な巻数）がある場合の処理
+            if (onixVolume) {
+                volume = parseInt(onixVolume, 10);
+                // タイトルからその巻数部分（"10" や "Vol.10" や "(10)"）を削除してシリーズ名を作る
+                // 末尾にある数字パターンを検索して削除
+                const cleanRegex = new RegExp(`[\\s\\(（\\[]*?(?:第|v|vol\\.?)?\\s*${volume}(?:巻)?[\\)）\\]]*?(?:\\(.+?\\)|（.+?）|<.+?>)?$`, 'i');
+                seriesName = title.replace(cleanRegex, '').trim();
+                
+                // 末尾に残った記号を削除
+                seriesName = seriesName.replace(/[\(\[\-]$/, '').trim();
+                
+                return { full: rawTitle, series: seriesName, volume: volume };
+            }
+
+            // 正規表現による抽出（ONIXがない場合）
+            // パターン: シリーズ名 + (区切り) + 数字 + (単位/カッコ) + (補足: レーベル名など)
+            // 例: "ONE PIECE 100 (ジャンプコミックス)" -> series: "ONE PIECE", vol: 100
+            const regex = /^(.+?)[\s\.\-\(（\[]*?(?:第|v|vol\.?|volume|part)?\s*(\d+)(?:巻)?[\s\)）\]]*?(?:\(.+?\)|（.+?）|<.+?>)?$/i;
+            const match = title.match(regex);
 
             if (match) {
                 seriesName = match[1].trim();
                 volume = parseInt(match[2], 10);
-            } else if (onixVolume) {
-                seriesName = rawTitle;
-                volume = parseInt(onixVolume, 10);
+                
+                // シリーズ名の末尾クリーニング
+                seriesName = seriesName.replace(/[\(\[\-]$/, '').trim();
             }
 
             return { 
@@ -94,7 +111,7 @@
             return (
                 <div className="max-w-md mx-auto min-h-screen bg-white shadow-lg flex flex-col">
                     <header className="bg-gray-800 text-white p-4 flex justify-between items-center sticky top-0 z-50">
-                        <h1 className="font-bold text-lg">📚 Scanner v4.7</h1>
+                        <h1 className="font-bold text-lg">📚 Scanner v4.8</h1>
                         <div className="space-x-2">
                             <button onClick={() => setView('scan')} className={`px-3 py-1 rounded ${view === 'scan' ? 'bg-blue-600' : 'bg-gray-700'}`}>Scan</button>
                             <button onClick={() => setView('history')} className={`px-3 py-1 rounded ${view === 'history' ? 'bg-blue-600' : 'bg-gray-700'}`}>List ({scannedBooks.length})</button>
@@ -174,7 +191,7 @@
                         const summary = data[0].summary;
                         const onix = data[0].onix;
 
-                        // OpenBDから取得した基本情報
+                        // 基本情報
                         let titleText = summary.title;
                         let authorText = summary.author;
                         let publisherText = summary.publisher;
@@ -192,47 +209,48 @@
                              }
                         } catch (err) { console.log("ONIX parse error", err); }
 
-                        // まずOpenBDの情報で解析
-                        let parsed = parseBookTitle(titleText, onixVolume);
+                        // 2. Google Books Fallback & Data Merge
+                        // Google Booksのデータは構造化されており綺麗なので、積極的に情報を補完・上書きする
+                        try {
+                            const gRes = await fetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${cleanIsbn}`);
+                            const gData = await gRes.json();
+                            
+                            if (gData.items && gData.items.length > 0) {
+                                const gInfo = gData.items[0].volumeInfo;
+                                
+                                // 画像補完
+                                if (!coverUrl && gInfo.imageLinks?.thumbnail) {
+                                    coverUrl = gInfo.imageLinks.thumbnail.replace(/^http:\/\//, 'https://');
+                                }
 
-                        // 2. Google Books Fallback (画像がない、または情報不足の場合に強力に補完)
-                        // 条件: 画像なし OR 巻数不明 OR 著者なし
-                        if (!coverUrl || parsed.volume === null || !authorText) {
-                            try {
-                                const gRes = await fetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${cleanIsbn}`);
-                                const gData = await gRes.json();
-                                if (gData.items && gData.items.length > 0) {
-                                    const gInfo = gData.items[0].volumeInfo;
-                                    
-                                    // 画像補完
-                                    if (!coverUrl && gInfo.imageLinks?.thumbnail) {
-                                        coverUrl = gInfo.imageLinks.thumbnail.replace(/^http:\/\//, 'https://');
-                                    }
+                                // 著者補完 & 整形 (Google Booksの著者は配列なので綺麗)
+                                if (gInfo.authors && gInfo.authors.length > 0) {
+                                    authorText = gInfo.authors.join(', ');
+                                }
 
-                                    // 著者補完
-                                    if (!authorText && gInfo.authors) {
-                                        authorText = gInfo.authors.join(', ');
-                                    }
-
-                                    // タイトル & 巻数補完 (OpenBDで巻数が取れていない場合)
-                                    if (parsed.volume === null && gInfo.title) {
+                                // タイトル補完: OpenBDのタイトルが空、またはGoogle Booksの方が詳しそうな場合
+                                // Google Booksのタイトルがシリーズ名+巻数になっていることが多いため、解析用に使用
+                                if (gInfo.title) {
+                                    // OpenBDで巻数が取れていない場合、Googleのタイトルを解析に使ってみる
+                                    if (!onixVolume) {
                                         const gParsed = parseBookTitle(gInfo.title);
                                         if (gParsed.volume !== null) {
-                                            // Google Booksのタイトルで巻数が取れたら採用
-                                            titleText = gInfo.title;
-                                            parsed = gParsed;
+                                            titleText = gInfo.title; // Googleのタイトルを採用
                                         }
                                     }
-
-                                    // 出版社補完 (OpenBDが空の場合のみ)
-                                    if (!publisherText && gInfo.publisher) {
-                                        publisherText = gInfo.publisher;
-                                    }
                                 }
-                            } catch (gErr) {
-                                console.warn("Google Books fallback failed", gErr);
+
+                                // 出版社補完
+                                if (!publisherText && gInfo.publisher) {
+                                    publisherText = gInfo.publisher;
+                                }
                             }
+                        } catch (gErr) {
+                            console.warn("Google Books fallback failed", gErr);
                         }
+
+                        // 最終的なタイトル解析
+                        const parsed = parseBookTitle(titleText, onixVolume);
 
                         const book = {
                             fullTitle: parsed.full,
@@ -246,8 +264,6 @@
                         onDetected(book);
                         setManualIsbn('');
                     } else {
-                        // OpenBDになくてもGoogle Booksにあるかもしれないので、ここでも検索する手はあるが、
-                        // ひとまずOpenBDベースでデータなしとする
                         alert(`データなし (ISBN: ${cleanIsbn})`);
                     }
                 } catch (e) {
