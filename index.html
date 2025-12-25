@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Notion Manga Scanner v4.4</title>
+    <title>Notion Manga Scanner v4.5</title>
     <!-- React & ReactDOM -->
     <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
@@ -27,6 +27,7 @@
 
         // --- ユーティリティ: タイトル解析 ---
         const parseBookTitle = (rawTitle) => {
+            // 例: "ONE PIECE 100", "進撃の巨人(34)"
             const regex = /^(.+?)\s*[\(（]?\s*(\d+)[\)）]?$/;
             const match = rawTitle.match(regex);
             if (match) {
@@ -76,7 +77,7 @@
             return (
                 <div className="max-w-md mx-auto min-h-screen bg-white shadow-lg flex flex-col">
                     <header className="bg-gray-800 text-white p-4 flex justify-between items-center sticky top-0 z-50">
-                        <h1 className="font-bold text-lg">📚 Scanner v4.4</h1>
+                        <h1 className="font-bold text-lg">📚 Scanner v4.5</h1>
                         <div className="space-x-2">
                             <button onClick={() => setView('scan')} className={`px-3 py-1 rounded ${view === 'scan' ? 'bg-blue-600' : 'bg-gray-700'}`}>Scan</button>
                             <button onClick={() => setView('history')} className={`px-3 py-1 rounded ${view === 'history' ? 'bg-blue-600' : 'bg-gray-700'}`}>List ({scannedBooks.length})</button>
@@ -244,23 +245,27 @@
                 // 画像URLをHTTPSに統一（httpだとNotionが拒否する場合がある）
                 const secureCoverUrl = book.cover ? book.cover.replace(/^http:\/\//i, 'https://') : null;
 
+                // データのサニタイズ (Notionは空文字を送るとエラーになることがあるため)
+                const safeText = (text) => text && text.trim().length > 0 ? text : "-";
+
                 const payload = {
                     parent: { database_id: settings.databaseId },
                     // カバー画像
                     cover: secureCoverUrl ? { type: "external", external: { url: secureCoverUrl } } : null,
                     properties: {
-                        "名前": { title: [{ text: { content: book.fullTitle } }] },
-                        "作品名": { rich_text: [{ text: { content: book.seriesName } }] },
-                        "巻数": book.volume ? { number: book.volume } : null,
-                        "著作者": { rich_text: [{ text: { content: book.author } }] },
-                        "出版社": { rich_text: [{ text: { content: book.publisher } }] },
-                        "ISBN": { rich_text: [{ text: { content: book.isbn } }] },
+                        "名前": { title: [{ text: { content: safeText(book.fullTitle) } }] },
+                        "作品名": { rich_text: [{ text: { content: safeText(book.seriesName) } }] },
+                        // 巻数は数値型なので、nullの場合は送信しない（プロパティ自体を含めない）
+                        ...(book.volume !== null ? { "巻数": { number: book.volume } } : {}),
+                        "著作者": { rich_text: [{ text: { content: safeText(book.author) } }] },
+                        "出版社": { rich_text: [{ text: { content: safeText(book.publisher) } }] },
+                        "ISBN": { rich_text: [{ text: { content: safeText(book.isbn) } }] },
                         // 【追加】「書影」プロパティ
                         ...(secureCoverUrl ? {
                             "書影": {
                                 "files": [
                                     {
-                                        "name": book.fullTitle,
+                                        "name": "Cover",
                                         "type": "external",
                                         "external": { "url": secureCoverUrl }
                                     }
