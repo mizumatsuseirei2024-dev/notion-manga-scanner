@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Notion Manga Scanner v4.8</title>
+    <title>Notion Manga Scanner v4.9</title>
     <!-- React & ReactDOM -->
     <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
@@ -25,43 +25,29 @@
     <script type="text/babel">
         const { useState, useEffect, useRef } = React;
 
-        // --- ユーティリティ: タイトル解析 (v4.8 強化版) ---
+        // --- ユーティリティ: タイトル解析 (v4.8ベース) ---
         const parseBookTitle = (rawTitle, onixVolume = null) => {
             if (!rawTitle) return { full: "", series: "", volume: null };
-
-            // 1. 全角英数字を半角に変換 & トリム
             let title = rawTitle.replace(/[！-～]/g, s => String.fromCharCode(s.charCodeAt(0) - 0xFEE0)).trim();
-            // 連続するスペースを1つに
             title = title.replace(/\s+/g, ' ');
 
             let seriesName = title;
             let volume = null;
 
-            // ONIXデータ（確実な巻数）がある場合の処理
             if (onixVolume) {
                 volume = parseInt(onixVolume, 10);
-                // タイトルからその巻数部分（"10" や "Vol.10" や "(10)"）を削除してシリーズ名を作る
-                // 末尾にある数字パターンを検索して削除
                 const cleanRegex = new RegExp(`[\\s\\(（\\[]*?(?:第|v|vol\\.?)?\\s*${volume}(?:巻)?[\\)）\\]]*?(?:\\(.+?\\)|（.+?）|<.+?>)?$`, 'i');
                 seriesName = title.replace(cleanRegex, '').trim();
-                
-                // 末尾に残った記号を削除
                 seriesName = seriesName.replace(/[\(\[\-]$/, '').trim();
-                
                 return { full: rawTitle, series: seriesName, volume: volume };
             }
 
-            // 正規表現による抽出（ONIXがない場合）
-            // パターン: シリーズ名 + (区切り) + 数字 + (単位/カッコ) + (補足: レーベル名など)
-            // 例: "ONE PIECE 100 (ジャンプコミックス)" -> series: "ONE PIECE", vol: 100
             const regex = /^(.+?)[\s\.\-\(（\[]*?(?:第|v|vol\.?|volume|part)?\s*(\d+)(?:巻)?[\s\)）\]]*?(?:\(.+?\)|（.+?）|<.+?>)?$/i;
             const match = title.match(regex);
 
             if (match) {
                 seriesName = match[1].trim();
                 volume = parseInt(match[2], 10);
-                
-                // シリーズ名の末尾クリーニング
                 seriesName = seriesName.replace(/[\(\[\-]$/, '').trim();
             }
 
@@ -99,7 +85,9 @@
             }, [scannedBooks]);
 
             const addBook = (book) => {
+                // 重複チェック: 同じISBNがあればアラート、なければ追加
                 if (scannedBooks.some(b => b.isbn === book.isbn)) {
+                    // 既にリストにある場合、スキャン画面のままアラートだけ出す
                     alert(`「${book.fullTitle}」は既にリストにあります。`);
                     return;
                 }
@@ -108,10 +96,14 @@
                 setView('history');
             };
 
+            const updateBook = (updatedBook) => {
+                setScannedBooks(scannedBooks.map(b => b.isbn === updatedBook.isbn ? updatedBook : b));
+            };
+
             return (
                 <div className="max-w-md mx-auto min-h-screen bg-white shadow-lg flex flex-col">
                     <header className="bg-gray-800 text-white p-4 flex justify-between items-center sticky top-0 z-50">
-                        <h1 className="font-bold text-lg">📚 Scanner v4.8</h1>
+                        <h1 className="font-bold text-lg">📚 Scanner v4.9</h1>
                         <div className="space-x-2">
                             <button onClick={() => setView('scan')} className={`px-3 py-1 rounded ${view === 'scan' ? 'bg-blue-600' : 'bg-gray-700'}`}>Scan</button>
                             <button onClick={() => setView('history')} className={`px-3 py-1 rounded ${view === 'history' ? 'bg-blue-600' : 'bg-gray-700'}`}>List ({scannedBooks.length})</button>
@@ -121,7 +113,7 @@
 
                     <main className="flex-grow p-4">
                         {view === 'scan' && <Scanner onDetected={addBook} />}
-                        {view === 'history' && <BookList books={scannedBooks} settings={settings} setBooks={setScannedBooks} />}
+                        {view === 'history' && <BookList books={scannedBooks} settings={settings} setBooks={setScannedBooks} onUpdate={updateBook} />}
                         {view === 'settings' && <Settings settings={settings} setSettings={setSettings} />}
                     </main>
                 </div>
@@ -191,13 +183,11 @@
                         const summary = data[0].summary;
                         const onix = data[0].onix;
 
-                        // 基本情報
                         let titleText = summary.title;
                         let authorText = summary.author;
                         let publisherText = summary.publisher;
                         let coverUrl = summary.cover;
 
-                        // ONIXから巻数取得トライ
                         let onixVolume = null;
                         try {
                              if (onix?.DescriptiveDetail?.TitleDetail?.TitleElement) {
@@ -209,49 +199,34 @@
                              }
                         } catch (err) { console.log("ONIX parse error", err); }
 
-                        // 2. Google Books Fallback & Data Merge
-                        // Google Booksのデータは構造化されており綺麗なので、積極的に情報を補完・上書きする
+                        // 2. Google Books Fallback
                         try {
                             const gRes = await fetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${cleanIsbn}`);
                             const gData = await gRes.json();
                             
                             if (gData.items && gData.items.length > 0) {
                                 const gInfo = gData.items[0].volumeInfo;
-                                
-                                // 画像補完
                                 if (!coverUrl && gInfo.imageLinks?.thumbnail) {
                                     coverUrl = gInfo.imageLinks.thumbnail.replace(/^http:\/\//, 'https://');
                                 }
-
-                                // 著者補完 & 整形 (Google Booksの著者は配列なので綺麗)
                                 if (gInfo.authors && gInfo.authors.length > 0) {
                                     authorText = gInfo.authors.join(', ');
                                 }
-
-                                // タイトル補完: OpenBDのタイトルが空、またはGoogle Booksの方が詳しそうな場合
-                                // Google Booksのタイトルがシリーズ名+巻数になっていることが多いため、解析用に使用
                                 if (gInfo.title) {
-                                    // OpenBDで巻数が取れていない場合、Googleのタイトルを解析に使ってみる
                                     if (!onixVolume) {
                                         const gParsed = parseBookTitle(gInfo.title);
                                         if (gParsed.volume !== null) {
-                                            titleText = gInfo.title; // Googleのタイトルを採用
+                                            titleText = gInfo.title;
                                         }
                                     }
                                 }
-
-                                // 出版社補完
                                 if (!publisherText && gInfo.publisher) {
                                     publisherText = gInfo.publisher;
                                 }
                             }
-                        } catch (gErr) {
-                            console.warn("Google Books fallback failed", gErr);
-                        }
+                        } catch (gErr) { console.warn("Google Books fallback failed", gErr); }
 
-                        // 最終的なタイトル解析
                         const parsed = parseBookTitle(titleText, onixVolume);
-
                         const book = {
                             fullTitle: parsed.full,
                             seriesName: parsed.series,
@@ -304,10 +279,80 @@
             );
         }
 
+        // --- コンポーネント: 編集モーダル ---
+        function EditModal({ book, onClose, onSave }) {
+            const [formData, setFormData] = useState({ ...book });
+
+            const handleChange = (e) => {
+                const { name, value } = e.target;
+                setFormData(prev => ({
+                    ...prev,
+                    [name]: name === 'volume' ? (value ? parseInt(value, 10) : '') : value
+                }));
+            };
+
+            const handleSave = () => {
+                onSave(formData);
+                onClose();
+            };
+
+            const googleImageSearchUrl = `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(formData.fullTitle + ' ' + (formData.volume ? formData.volume + '巻' : '') + ' 表紙')}`;
+
+            return (
+                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+                    <div className="bg-white rounded-lg shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto">
+                        <div className="p-4 border-b flex justify-between items-center bg-gray-50 rounded-t-lg">
+                            <h3 className="font-bold text-lg">情報を編集</h3>
+                            <button onClick={onClose} className="text-gray-500 hover:text-gray-700 text-xl">&times;</button>
+                        </div>
+                        <div className="p-4 space-y-3">
+                            <div>
+                                <label className="block text-xs font-bold text-gray-700 mb-1">作品名 (シリーズ)</label>
+                                <input type="text" name="seriesName" value={formData.seriesName || ''} onChange={handleChange} className="w-full p-2 border rounded" />
+                            </div>
+                            <div className="flex gap-2">
+                                <div className="flex-grow">
+                                    <label className="block text-xs font-bold text-gray-700 mb-1">巻数</label>
+                                    <input type="number" name="volume" value={formData.volume || ''} onChange={handleChange} className="w-full p-2 border rounded" />
+                                </div>
+                                <div className="flex-grow-[2]">
+                                    <label className="block text-xs font-bold text-gray-700 mb-1">著者</label>
+                                    <input type="text" name="author" value={formData.author || ''} onChange={handleChange} className="w-full p-2 border rounded" />
+                                </div>
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold text-gray-700 mb-1">正式タイトル (名前)</label>
+                                <input type="text" name="fullTitle" value={formData.fullTitle || ''} onChange={handleChange} className="w-full p-2 border rounded" />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold text-gray-700 mb-1">出版社</label>
+                                <input type="text" name="publisher" value={formData.publisher || ''} onChange={handleChange} className="w-full p-2 border rounded" />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold text-gray-700 mb-1">画像URL (書影)</label>
+                                <div className="flex gap-2 mb-2">
+                                    <input type="text" name="cover" value={formData.cover || ''} onChange={handleChange} className="flex-grow p-2 border rounded text-xs" placeholder="https://..." />
+                                    {formData.cover && <img src={formData.cover} className="h-8 w-6 object-cover border" alt="preview" />}
+                                </div>
+                                <a href={googleImageSearchUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-600 hover:underline flex items-center">
+                                    🔍 Google画像検索で探す (URLをコピーして貼り付け)
+                                </a>
+                            </div>
+                        </div>
+                        <div className="p-4 border-t bg-gray-50 rounded-b-lg flex justify-end gap-2">
+                            <button onClick={onClose} className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded">キャンセル</button>
+                            <button onClick={handleSave} className="px-4 py-2 bg-blue-600 text-white font-bold rounded hover:bg-blue-700">保存</button>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
         // --- コンポーネント: BookList ---
-        function BookList({ books, settings, setBooks }) {
+        function BookList({ books, settings, setBooks, onUpdate }) {
             const [status, setStatus] = useState({});
             const [isSendingAll, setIsSendingAll] = useState(false);
+            const [editingBook, setEditingBook] = useState(null); // 編集中の本
 
             const sendToNotion = async (book, silent = false) => {
                 if (!settings.notionToken || !settings.databaseId) {
@@ -318,7 +363,7 @@
                 setStatus(prev => ({ ...prev, [book.isbn]: 'loading' }));
 
                 const secureCoverUrl = book.cover ? book.cover.replace(/^http:\/\//i, 'https://') : null;
-                const safeText = (text) => text && text.trim().length > 0 ? text : "-";
+                const safeText = (text) => text && String(text).trim().length > 0 ? String(text) : "-";
 
                 const payload = {
                     parent: { database_id: settings.databaseId },
@@ -326,7 +371,7 @@
                     properties: {
                         "名前": { title: [{ text: { content: safeText(book.fullTitle) } }] },
                         "作品名": { rich_text: [{ text: { content: safeText(book.seriesName) } }] },
-                        ...(book.volume !== null ? { "巻数": { number: book.volume } } : {}),
+                        ...(book.volume !== null && book.volume !== "" ? { "巻数": { number: parseInt(book.volume, 10) } } : {}),
                         "著作者": { rich_text: [{ text: { content: safeText(book.author) } }] },
                         "出版社": { rich_text: [{ text: { content: safeText(book.publisher) } }] },
                         "ISBN": { rich_text: [{ text: { content: safeText(book.isbn) } }] },
@@ -347,7 +392,6 @@
                 try {
                     let proxy = settings.proxyUrl || '';
                     const targetUrl = "https://api.notion.com/v1/pages";
-                    
                     const finalUrl = proxy.includes('corsproxy.io') 
                         ? proxy + encodeURIComponent(targetUrl)
                         : proxy + targetUrl;
@@ -401,7 +445,7 @@
                 }
 
                 setIsSendingAll(false);
-                alert(`一括送信完了\n成功: ${successCount}件\n失敗: ${failCount}件\n\n失敗したものは設定からProxyを切り替えて再試行してください。`);
+                alert(`一括送信完了\n成功: ${successCount}件\n失敗: ${failCount}件`);
             };
 
             const copyAll = () => {
@@ -439,7 +483,6 @@
                         >
                             {isSendingAll ? '送信中...' : '🚀 一括送信'}
                         </button>
-                        
                         <button onClick={downloadCSV} className="text-sm bg-green-100 hover:bg-green-200 px-3 py-1 rounded text-green-800 border border-green-300">
                             📥 CSV保存
                         </button>
@@ -448,24 +491,26 @@
                         </button>
                     </div>
                     {books.map((book, idx) => (
-                        <div key={idx} className="bg-white border rounded-lg p-3 flex shadow-sm items-start">
+                        <div key={idx} className="bg-white border rounded-lg p-3 flex shadow-sm items-start relative">
                             {book.cover ? <img src={book.cover} className="w-16 h-24 object-cover rounded mr-3 bg-gray-200" /> : <div className="w-16 h-24 bg-gray-200 rounded mr-3 flex items-center justify-center text-xs">No Img</div>}
                             <div className="flex-grow">
                                 <h3 className="font-bold text-sm">{book.fullTitle}</h3>
                                 <div className="flex items-center text-xs text-blue-600 mb-1 space-x-2">
                                     <span className="bg-blue-50 px-1 rounded">作品: {book.seriesName}</span>
-                                    {book.volume && <span className="bg-blue-50 px-1 rounded">巻: {book.volume}</span>}
+                                    {book.volume !== null && book.volume !== "" && <span className="bg-blue-50 px-1 rounded">巻: {book.volume}</span>}
                                 </div>
                                 <p className="text-xs text-gray-600 mb-2">{book.author}</p>
                                 <div className="flex space-x-2">
                                     <button onClick={() => sendToNotion(book)} disabled={status[book.isbn] === 'success'} className={`text-xs px-3 py-1 rounded text-white ${status[book.isbn] === 'success' ? 'bg-green-500' : status[book.isbn] === 'error' ? 'bg-red-500' : 'bg-blue-600'}`}>
                                         {status[book.isbn] === 'success' ? '送信済' : 'Notionへ送信'}
                                     </button>
+                                    <button onClick={() => setEditingBook(book)} className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 px-2 py-1 rounded border">編集</button>
                                     <button onClick={() => removeBook(book.isbn)} className="text-xs text-red-400 p-1">削除</button>
                                 </div>
                             </div>
                         </div>
                     ))}
+                    {editingBook && <EditModal book={editingBook} onClose={() => setEditingBook(null)} onSave={onUpdate} />}
                 </div>
             );
         }
