@@ -3,10 +3,19 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Notion Manga Scanner v4.16</title>
+    <title>Notion Manga Scanner v4.17</title>
+    <!-- Error Handling for Debug -->
+    <script>
+        window.onerror = function(msg, url, line, col, error) {
+            const div = document.createElement("div");
+            div.style.cssText = "position:fixed; top:0; left:0; width:100%; background:red; color:white; padding:10px; z-index:9999;";
+            div.innerText = "Error: " + msg + " (Line: " + line + ")";
+            document.body.appendChild(div);
+        };
+    </script>
     <!-- React & ReactDOM -->
-    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
-    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <!-- Babel -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <!-- Tailwind CSS -->
@@ -20,7 +29,15 @@
     </style>
 </head>
 <body>
-    <div id="root"></div>
+    <div id="root">
+        <!-- Reactがマウントされるまでのローディング表示 -->
+        <div class="min-h-screen flex items-center justify-center text-gray-500">
+            <div class="text-center">
+                <p class="text-xl font-bold mb-2">🚀 Loading...</p>
+                <p class="text-sm">アプリを読み込んでいます。<br>画面が変わらない場合は再読み込みしてください。</p>
+            </div>
+        </div>
+    </div>
 
     <script type="text/babel">
         const { useState, useEffect, useRef } = React;
@@ -105,7 +122,7 @@
             return (
                 <div className="max-w-md mx-auto min-h-screen bg-white shadow-lg flex flex-col">
                     <header className="bg-gray-800 text-white p-4 flex justify-between items-center sticky top-0 z-50">
-                        <h1 className="font-bold text-lg">📚 Scanner v4.16</h1>
+                        <h1 className="font-bold text-lg">📚 Scanner v4.17</h1>
                         <div className="space-x-2">
                             <button onClick={() => setView('scan')} className={`px-3 py-1 rounded ${view === 'scan' ? 'bg-blue-600' : 'bg-gray-700'}`}>Scan</button>
                             <button onClick={() => setView('history')} className={`px-3 py-1 rounded ${view === 'history' ? 'bg-blue-600' : 'bg-gray-700'}`}>List ({scannedBooks.length})</button>
@@ -391,7 +408,6 @@
                     });
 
                     if (response.ok) {
-                        // v4.16: 送信成功時にリストから削除
                         setBooks(prevBooks => prevBooks.filter(b => b.isbn !== book.isbn));
                         setStatus(prev => {
                             const newStatus = { ...prev };
@@ -435,7 +451,6 @@
                 let successCount = 0;
                 let failCount = 0;
                 
-                // v4.16: 送信対象をコピーして処理（送信成功時にbooksから削除されるため）
                 const targets = [...books];
 
                 for (const book of targets) {
@@ -446,7 +461,7 @@
                 }
 
                 setIsSendingAll(false);
-                alert(`完了\n成功: ${successCount}件\n失敗: ${failCount}件`);
+                alert(`完了\n成功: ${successCount}件\n失敗: ${failCount}件\n\n失敗した場合はProxyを切り替えてみてください。`);
             };
 
             const copyAll = () => {
