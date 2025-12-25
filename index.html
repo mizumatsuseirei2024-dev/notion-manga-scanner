@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Notion Manga Scanner v4.2</title>
+    <title>Notion Manga Scanner v4.3</title>
     <!-- React & ReactDOM -->
     <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
@@ -27,7 +27,6 @@
 
         // --- ユーティリティ: タイトル解析 ---
         const parseBookTitle = (rawTitle) => {
-            // 例: "ONE PIECE 100", "進撃の巨人(34)"
             const regex = /^(.+?)\s*[\(（]?\s*(\d+)[\)）]?$/;
             const match = rawTitle.match(regex);
             if (match) {
@@ -41,7 +40,7 @@
         function App() {
             const [view, setView] = useState('scan');
             const [scannedBooks, setScannedBooks] = useState([]);
-            // v4変更点: デフォルトのプロキシを変更 (登録不要のもの)
+            // v4.3: デフォルトはProxy Aだが、設定画面での切り替えを推奨
             const [settings, setSettings] = useState({
                 notionToken: '',
                 databaseId: '',
@@ -52,7 +51,6 @@
                 const savedSettings = localStorage.getItem('manga_scanner_settings');
                 if (savedSettings) {
                     const parsed = JSON.parse(savedSettings);
-                    // 以前の設定が残っている場合でも、プロキシURLが空ならデフォルトを入れる
                     if (!parsed.proxyUrl) parsed.proxyUrl = 'https://corsproxy.io/?';
                     setSettings(parsed);
                 }
@@ -78,7 +76,7 @@
             return (
                 <div className="max-w-md mx-auto min-h-screen bg-white shadow-lg flex flex-col">
                     <header className="bg-gray-800 text-white p-4 flex justify-between items-center sticky top-0 z-50">
-                        <h1 className="font-bold text-lg">📚 Scanner v4.2</h1>
+                        <h1 className="font-bold text-lg">📚 Scanner v4.3</h1>
                         <div className="space-x-2">
                             <button onClick={() => setView('scan')} className={`px-3 py-1 rounded ${view === 'scan' ? 'bg-blue-600' : 'bg-gray-700'}`}>Scan</button>
                             <button onClick={() => setView('history')} className={`px-3 py-1 rounded ${view === 'history' ? 'bg-blue-600' : 'bg-gray-700'}`}>List ({scannedBooks.length})</button>
@@ -211,7 +209,7 @@
         // --- コンポーネント: BookList ---
         function BookList({ books, settings, setBooks }) {
             const [status, setStatus] = useState({});
-            const [isSendingAll, setIsSendingAll] = useState(false); // 一括送信中フラグ
+            const [isSendingAll, setIsSendingAll] = useState(false);
 
             const sendToNotion = async (book, silent = false) => {
                 if (!settings.notionToken || !settings.databaseId) {
@@ -221,10 +219,13 @@
 
                 setStatus(prev => ({ ...prev, [book.isbn]: 'loading' }));
 
+                // 画像URLをHTTPSに統一（httpだとNotionが拒否する場合がある）
+                const secureCoverUrl = book.cover ? book.cover.replace(/^http:\/\//i, 'https://') : null;
+
                 const payload = {
                     parent: { database_id: settings.databaseId },
-                    // ページのカバー画像（ヘッダー）として設定
-                    cover: book.cover ? { type: "external", external: { url: book.cover } } : null,
+                    // カバー画像
+                    cover: secureCoverUrl ? { type: "external", external: { url: secureCoverUrl } } : null,
                     properties: {
                         "名前": { title: [{ text: { content: book.fullTitle } }] },
                         "作品名": { rich_text: [{ text: { content: book.seriesName } }] },
@@ -232,14 +233,14 @@
                         "著作者": { rich_text: [{ text: { content: book.author } }] },
                         "出版社": { rich_text: [{ text: { content: book.publisher } }] },
                         "ISBN": { rich_text: [{ text: { content: book.isbn } }] },
-                        // 【追加】「書影」プロパティ（ファイル&メディア）にも設定
-                        ...(book.cover ? {
+                        // 【追加】「書影」プロパティ
+                        ...(secureCoverUrl ? {
                             "書影": {
                                 "files": [
                                     {
-                                        "name": "Cover",
+                                        "name": book.fullTitle,
                                         "type": "external",
-                                        "external": { "url": book.cover }
+                                        "external": { "url": secureCoverUrl }
                                     }
                                 ]
                             }
@@ -250,8 +251,6 @@
                 try {
                     let proxy = settings.proxyUrl || '';
                     const targetUrl = "https://api.notion.com/v1/pages";
-                    
-                    const fetchUrl = proxy + encodeURIComponent(targetUrl);
                     
                     const finalUrl = proxy.includes('corsproxy.io') 
                         ? proxy + encodeURIComponent(targetUrl)
@@ -271,13 +270,19 @@
                         setStatus(prev => ({ ...prev, [book.isbn]: 'success' }));
                         return true;
                     } else {
-                        const txt = await response.text();
-                        throw new Error(txt);
+                        // v4.3: 詳細なエラーメッセージを取得
+                        const errorObj = await response.json().catch(() => ({}));
+                        const errorMsg = errorObj.message || await response.text();
+                        // ログにも出す
+                        console.error("Notion API Error Detail:", errorObj);
+                        throw new Error(`[${response.status}] ${errorMsg}`);
                     }
                 } catch (error) {
                     console.error(error);
                     setStatus(prev => ({ ...prev, [book.isbn]: 'error' }));
-                    if (!silent) alert("送信エラー: " + error.message + "\n\n設定画面でProxyの種類を切り替えてみてください。");
+                    if (!silent) {
+                         alert(`送信エラー: ${error.message}\n\nヒント:\n・[400]ならプロパティ名「書影」や「巻数」が間違っている可能性があります。\n・Network ErrorならProxyの設定を「Proxy B」に切り替えてみてください。`);
+                    }
                     return false;
                 }
             };
@@ -298,22 +303,20 @@
                 let failCount = 0;
 
                 for (const book of targetBooks) {
-                    // APIレート制限対策: 1秒待機
                     await new Promise(resolve => setTimeout(resolve, 1000));
-                    
                     const result = await sendToNotion(book, true);
                     if (result) successCount++;
                     else failCount++;
                 }
 
                 setIsSendingAll(false);
-                alert(`一括送信完了\n成功: ${successCount}件\n失敗: ${failCount}件`);
+                alert(`一括送信完了\n成功: ${successCount}件\n失敗: ${failCount}件\n\n失敗したものは設定からProxyを切り替えて再試行してください。`);
             };
 
             const copyAll = () => {
                 const text = books.map(b => `${b.fullTitle}\t${b.seriesName}\t${b.volume || ''}\t${b.author}\t${b.publisher}\t${b.isbn}`).join('\n');
                 navigator.clipboard.writeText(text);
-                alert("コピー完了。PCのNotionで貼り付けてください。うまくいかない場合は「CSV保存」を使用してください。");
+                alert("コピー完了");
             };
 
             const downloadCSV = () => {
@@ -321,7 +324,6 @@
                 const rows = books.map(b => 
                     `"${b.fullTitle}","${b.seriesName}",${b.volume || ''},"${b.author}","${b.publisher}","${b.isbn}"`
                 ).join('\n');
-                
                 const blob = new Blob([new Uint8Array([0xEF, 0xBB, 0xBF]), header + rows], { type: 'text/csv' });
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement('a');
@@ -339,7 +341,6 @@
             return (
                 <div className="space-y-4">
                     <div className="flex flex-wrap justify-end gap-2 mb-2">
-                        {/* 一括送信ボタン */}
                         <button 
                             onClick={sendAll} 
                             disabled={isSendingAll}
@@ -406,8 +407,8 @@
                             <button onClick={() => setProxy('https://cors-anywhere.herokuapp.com/')} className="bg-gray-200 px-2 py-1 rounded hover:bg-gray-300">Proxy B (要許可)</button>
                         </div>
                         <p className="text-xs text-gray-500 mt-1">
-                            ※ "Proxy A" はボタン許可不要で動きますが、稀に遅いことがあります。<br/>
-                            ※ "Proxy B" は<a href="https://cors-anywhere.herokuapp.com/corsdemo" target="_blank" className="underline text-blue-600">許可ページ</a>でボタンを押す必要があります。
+                            ※ 送信に失敗する場合は、上記ボタンで「Proxy B」に切り替えて<br/>
+                            <a href="https://cors-anywhere.herokuapp.com/corsdemo" target="_blank" className="underline text-blue-600">許可ページ</a>でボタンを押してから再試行してください。
                         </p>
                     </div>
                 </div>
