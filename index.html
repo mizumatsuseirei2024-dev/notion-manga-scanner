@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Notion Manga Scanner v4.13</title>
+    <title>Notion Manga Scanner v4.14</title>
     <!-- React & ReactDOM -->
     <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
@@ -107,7 +107,7 @@
             return (
                 <div className="max-w-md mx-auto min-h-screen bg-white shadow-lg flex flex-col">
                     <header className="bg-gray-800 text-white p-4 flex justify-between items-center sticky top-0 z-50">
-                        <h1 className="font-bold text-lg">📚 Scanner v4.13</h1>
+                        <h1 className="font-bold text-lg">📚 Scanner v4.14</h1>
                         <div className="space-x-2">
                             <button onClick={() => setView('scan')} className={`px-3 py-1 rounded ${view === 'scan' ? 'bg-blue-600' : 'bg-gray-700'}`}>Scan</button>
                             <button onClick={() => setView('history')} className={`px-3 py-1 rounded ${view === 'history' ? 'bg-blue-600' : 'bg-gray-700'}`}>List ({scannedBooks.length})</button>
@@ -512,16 +512,43 @@
 
         // --- コンポーネント: Settings ---
         function Settings({ settings, setSettings }) {
+            const [testStatus, setTestStatus] = useState(null); // null, 'testing', 'success', 'error'
+
             const handleChange = (e) => {
                 const { name, value } = e.target;
                 setSettings({ ...settings, [name]: value });
                 localStorage.setItem('manga_scanner_settings', JSON.stringify({ ...settings, [name]: value }));
+                setTestStatus(null);
             };
             
             const setProxy = (url) => {
                 const newSettings = { ...settings, proxyUrl: url };
                 setSettings(newSettings);
                 localStorage.setItem('manga_scanner_settings', JSON.stringify(newSettings));
+                setTestStatus(null);
+            };
+
+            const testConnection = async () => {
+                setTestStatus('testing');
+                try {
+                    const proxy = settings.proxyUrl;
+                    const testTarget = "https://httpbin.org/get";
+                    const testUrl = proxy.includes('corsproxy.io') 
+                        ? proxy + encodeURIComponent(testTarget)
+                        : proxy + testTarget;
+
+                    const res = await fetch(testUrl);
+                    if (res.ok) {
+                        setTestStatus('success');
+                    } else if (res.status === 403) {
+                        throw new Error('許可が必要です');
+                    } else {
+                        throw new Error(res.statusText);
+                    }
+                } catch (e) {
+                    console.error(e);
+                    setTestStatus('error');
+                }
             };
 
             return (
@@ -533,12 +560,27 @@
                     <div>
                         <label className="block text-sm">CORS Proxy URL</label>
                         <input type="text" name="proxyUrl" value={settings.proxyUrl} onChange={handleChange} className="w-full p-2 border rounded mb-2" />
-                        <div className="flex gap-2 text-xs">
+                        <div className="flex gap-2 text-xs mb-3">
                             <button onClick={() => setProxy('https://corsproxy.io/?')} className="bg-gray-200 px-2 py-1 rounded hover:bg-gray-300">Proxy A (登録不要)</button>
-                            <button onClick={() => setProxy('https://cors-anywhere.herokuapp.com/')} className="bg-gray-200 px-2 py-1 rounded hover:bg-gray-300">Proxy B (要許可・安定)</button>
+                            <button onClick={() => setProxy('https://cors-anywhere.herokuapp.com/')} className="bg-gray-200 px-2 py-1 rounded hover:bg-gray-300">Proxy B (要許可)</button>
                         </div>
+                        
+                        {/* 接続テストボタン */}
+                        <div className="mb-2">
+                            <button onClick={testConnection} disabled={testStatus === 'testing'} className="text-sm bg-blue-100 hover:bg-blue-200 text-blue-800 px-3 py-1 rounded border border-blue-300 flex items-center">
+                                {testStatus === 'testing' ? '📡 接続テスト中...' : '📡 接続テスト'}
+                            </button>
+                            {testStatus === 'success' && <p className="text-xs text-green-600 mt-1 font-bold">✅ 接続OK！許可されています。</p>}
+                            {testStatus === 'error' && (
+                                <p className="text-xs text-red-600 mt-1 font-bold">
+                                    ❌ 接続失敗。
+                                    {settings.proxyUrl.includes('cors-anywhere') && <span>下のリンクから許可ボタンを押してください。</span>}
+                                </p>
+                            )}
+                        </div>
+
                         <p className="text-xs text-gray-500 mt-1">
-                            ※ 送信できない場合は「Proxy B」を選び、<a href="https://cors-anywhere.herokuapp.com/corsdemo" target="_blank" className="underline text-blue-600">許可ページ</a>でボタンを押してください。
+                            ※ Proxy Bを使う場合は、<a href="https://cors-anywhere.herokuapp.com/corsdemo" target="_blank" className="underline text-blue-600">許可ページ</a>でボタンを押してください。
                         </p>
                     </div>
                 </div>
