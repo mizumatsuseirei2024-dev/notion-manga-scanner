@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Notion Manga Scanner v4.1</title>
+    <title>Notion Manga Scanner v4.2</title>
     <!-- React & ReactDOM -->
     <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
@@ -78,7 +78,7 @@
             return (
                 <div className="max-w-md mx-auto min-h-screen bg-white shadow-lg flex flex-col">
                     <header className="bg-gray-800 text-white p-4 flex justify-between items-center sticky top-0 z-50">
-                        <h1 className="font-bold text-lg">📚 Scanner v4.1</h1>
+                        <h1 className="font-bold text-lg">📚 Scanner v4.2</h1>
                         <div className="space-x-2">
                             <button onClick={() => setView('scan')} className={`px-3 py-1 rounded ${view === 'scan' ? 'bg-blue-600' : 'bg-gray-700'}`}>Scan</button>
                             <button onClick={() => setView('history')} className={`px-3 py-1 rounded ${view === 'history' ? 'bg-blue-600' : 'bg-gray-700'}`}>List ({scannedBooks.length})</button>
@@ -223,6 +223,7 @@
 
                 const payload = {
                     parent: { database_id: settings.databaseId },
+                    // ページのカバー画像（ヘッダー）として設定
                     cover: book.cover ? { type: "external", external: { url: book.cover } } : null,
                     properties: {
                         "名前": { title: [{ text: { content: book.fullTitle } }] },
@@ -230,7 +231,19 @@
                         "巻数": book.volume ? { number: book.volume } : null,
                         "著作者": { rich_text: [{ text: { content: book.author } }] },
                         "出版社": { rich_text: [{ text: { content: book.publisher } }] },
-                        "ISBN": { rich_text: [{ text: { content: book.isbn } }] }
+                        "ISBN": { rich_text: [{ text: { content: book.isbn } }] },
+                        // 【追加】「書影」プロパティ（ファイル&メディア）にも設定
+                        ...(book.cover ? {
+                            "書影": {
+                                "files": [
+                                    {
+                                        "name": "Cover",
+                                        "type": "external",
+                                        "external": { "url": book.cover }
+                                    }
+                                ]
+                            }
+                        } : {})
                     }
                 };
 
