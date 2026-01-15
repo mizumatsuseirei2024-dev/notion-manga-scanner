@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Notion Manga Scanner v5.1.3</title>
+    <title>Notion Manga Scanner v5.2.0</title>
     <script>
         window.onerror = function(msg, url, line, col, error) {
             const div = document.createElement("div");
@@ -130,7 +130,7 @@
                             <div className="neu-flat w-10 h-10 flex items-center justify-center text-xl">📚</div>
                             <h1 className="text-xl font-bold tracking-wider text-[var(--text-main)]">SCANNER</h1>
                         </div>
-                        <div className="text-[10px] text-[var(--text-sub)] font-mono tracking-widest">V5.1.3</div>
+                        <div className="text-[10px] text-[var(--text-sub)] font-mono tracking-widest">V5.2.0</div>
                     </div>
                     <div className="flex-grow overflow-y-auto hide-scrollbar px-4 pb-32">
                         {view === 'scan' && <ScannerView onDetected={addBook} />}
@@ -193,29 +193,92 @@
             const fetchBook = async (isbn) => {
                 setLoading(true);
                 try {
-                    const clean = isbn.replace(/[^0-9]/g, '');
-                    if (clean.length !== 13) throw new Error("13桁のISBNを入力");
-                    const res = await fetch(`https://api.openbd.jp/v1/get?isbn=${clean}`);
-                    const d = await res.json();
-                    if (d && d[0]) {
-                        const s = d[0].summary, o = d[0].onix;
-                        let t = s.title, a = s.author, p = s.publisher, c = s.cover, vol = null;
-                        try { const te=o?.DescriptiveDetail?.TitleDetail?.TitleElement; const el=Array.isArray(te)?te:[te]; const pe=el?.find(e=>e?.PartNumber); if(pe) vol=pe.PartNumber; } catch(e){}
+                    const cleanIsbn = isbn.replace(/[^0-9]/g, '');
+                    if (cleanIsbn.length !== 13) throw new Error("13桁のISBNを入力");
+
+                    let bookData = {
+                        isbn: cleanIsbn,
+                        title: '',
+                        seriesName: '',
+                        volume: null,
+                        author: '',
+                        publisher: '',
+                        cover: ''
+                    };
+
+                    // 1. OpenBD (最優先)
+                    try {
+                        const res = await fetch(`https://api.openbd.jp/v1/get?isbn=${cleanIsbn}`);
+                        const json = await res.json();
+                        if (json && json[0]) {
+                            const s = json[0].summary;
+                            bookData.title = s.title;
+                            bookData.author = s.author;
+                            bookData.publisher = s.publisher;
+                            bookData.cover = s.cover;
+                            // ONIX Volume
+                            try {
+                                const o = json[0].onix;
+                                const te = o?.DescriptiveDetail?.TitleDetail?.TitleElement;
+                                const els = Array.isArray(te) ? te : [te];
+                                const pel = els?.find(e => e?.PartNumber);
+                                if (pel) bookData.volume = pel.PartNumber;
+                            } catch(e){}
+                        }
+                    } catch(e) { console.warn("OpenBD failed", e); }
+
+                    // 2. Google Books (ISBN) - 補完
+                    if (!bookData.title || !bookData.cover) {
                         try {
-                            const gr = await fetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${clean}`);
-                            const gd = await gr.json();
-                            const gi = gd.items?.[0]?.volumeInfo;
-                            if(gi){
-                                if(!c && gi.imageLinks?.thumbnail) c = gi.imageLinks.thumbnail.replace(/^http:\/\//, 'https://');
-                                if(gi.authors?.length) a = gi.authors.join(', ');
-                                if(gi.title && !vol) { const gp = parseBookTitle(gi.title); if(gp.volume!==null) t = gi.title; }
-                                if(!p && gi.publisher) p = gi.publisher;
+                            const res = await fetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${cleanIsbn}`);
+                            const json = await res.json();
+                            if (json.items?.[0]?.volumeInfo) {
+                                const info = json.items[0].volumeInfo;
+                                if (!bookData.title) bookData.title = info.title;
+                                if (!bookData.author && info.authors) bookData.author = info.authors.join(', ');
+                                if (!bookData.publisher && info.publisher) bookData.publisher = info.publisher;
+                                if (!bookData.cover && info.imageLinks?.thumbnail) {
+                                    bookData.cover = info.imageLinks.thumbnail.replace(/^http:\/\//, 'https://');
+                                }
                             }
-                        } catch(e){}
-                        const parsed = parseBookTitle(t, vol);
-                        onDetected({ fullTitle: parsed.full, seriesName: parsed.series, volume: parsed.volume, author: a, publisher: p, isbn: s.isbn, cover: c||'' });
-                        setManualIsbn('');
-                    } else alert("データなし");
+                        } catch(e) { console.warn("Google Books ISBN failed", e); }
+                    }
+
+                    // 3. Google Books (Title Search) - 画像がない場合の強力なフォールバック
+                    if (bookData.title && !bookData.cover) {
+                        try {
+                            const query = `${bookData.title} ${bookData.author}`.trim();
+                            const res = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(query)}&maxResults=1`);
+                            const json = await res.json();
+                            if (json.items?.[0]?.volumeInfo?.imageLinks?.thumbnail) {
+                                bookData.cover = json.items[0].volumeInfo.imageLinks.thumbnail.replace(/^http:\/\//, 'https://');
+                            }
+                        } catch(e) { console.warn("Google Books Title Search failed", e); }
+                    }
+
+                    // 4. Open Library (Last Resort)
+                    if (!bookData.cover) {
+                        bookData.cover = `https://covers.openlibrary.org/b/isbn/${cleanIsbn}-L.jpg`;
+                    }
+
+                    if (!bookData.title) {
+                        alert("データなし");
+                        return;
+                    }
+
+                    const parsed = parseBookTitle(bookData.title, bookData.volume);
+                    
+                    onDetected({
+                        fullTitle: parsed.full,
+                        seriesName: parsed.series,
+                        volume: parsed.volume,
+                        author: bookData.author,
+                        publisher: bookData.publisher,
+                        isbn: bookData.isbn,
+                        cover: bookData.cover
+                    });
+                    setManualIsbn('');
+
                 } catch(e) { alert(e.message); } finally { setLoading(false); }
             };
 
@@ -281,10 +344,13 @@
                     };
                     if (c) {
                         if (c.length <= 2000) props["書影URL"] = { url: c };
-                        props["書影"] = { files: [{ name: safe(book.fullTitle), type: "external", external: { url: c } }] };
+                        // Check URL length for Files property
+                        if (c.length <= 2000) {
+                            props["書影"] = { files: [{ name: safe(book.fullTitle), type: "external", external: { url: c } }] };
+                        }
                     }
 
-                    const body = { parent: { database_id: settings.databaseId }, cover: c ? { type: "external", external: { url: c } } : null, properties: props };
+                    const body = { parent: { database_id: settings.databaseId }, cover: (c && c.length <= 2000) ? { type: "external", external: { url: c } } : null, properties: props };
                     const p = settings.proxyUrl;
                     const u = p.includes('corsproxy.io') ? p + encodeURIComponent('https://api.notion.com/v1/pages') : p + 'https://api.notion.com/v1/pages';
                     const r = await fetch(u, { method: "POST", headers: { "Authorization": `Bearer ${settings.notionToken}`, "Content-Type": "application/json", "Notion-Version": "2022-06-28" }, body: JSON.stringify(body) });
