@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Notion Manga Scanner v5.1.0</title>
+    <title>Notion Manga Scanner v5.1.1</title>
     <script>
         window.onerror = function(msg, url, line, col, error) {
             const div = document.createElement("div");
@@ -131,7 +131,7 @@
                             <div className="neu-flat w-10 h-10 flex items-center justify-center text-xl">📚</div>
                             <h1 className="text-xl font-bold tracking-wider text-[var(--text-main)]">SCANNER</h1>
                         </div>
-                        <div className="text-[10px] text-[var(--text-sub)] font-mono tracking-widest">V5.1.0</div>
+                        <div className="text-[10px] text-[var(--text-sub)] font-mono tracking-widest">V5.1.1</div>
                     </div>
                     <div className="flex-grow overflow-y-auto hide-scrollbar px-4 pb-32">
                         {view === 'scan' && <ScannerView onDetected={addBook} />}
@@ -248,7 +248,6 @@
                 // --- 重複チェック ---
                 try {
                     let proxy = settings.proxyUrl || '';
-                    // URL生成ヘルパー
                     const getUrl = (target) => proxy.includes('corsproxy.io') ? proxy + encodeURIComponent(target) : proxy + target;
                     
                     const queryUrl = getUrl(`https://api.notion.com/v1/databases/${settings.databaseId}/query`);
@@ -264,7 +263,6 @@
                         const queryData = await queryRes.json();
                         if (queryData.results && queryData.results.length > 0) {
                             if (!silent) alert(`「${book.fullTitle}」は既に登録済みです。`);
-                            // リストから削除（成功扱い）
                             setBooks(prev => prev.filter(b => b.isbn !== book.isbn));
                             setStatus(p => { const n = { ...p }; delete n[book.isbn]; return n; });
                             return true;
@@ -272,26 +270,37 @@
                     }
                 } catch(e) {
                     console.error("Duplicate check failed:", e);
-                    // チェック失敗時はそのまま登録へ進むか、エラーにするか。ここでは進む。
                 }
                 // ------------------
 
                 let c = book.cover?.trim()||"";
                 if(c) { c=c.replace(/^http:\/\//i,'https://'); if(c.includes('books.google')||c.includes('googleapis')) c=c.replace('&edge=curl',''); }
                 const safe = t => t && String(t).trim().length>0 ? String(t) : "-";
-                const body = {
-                    parent: { database_id: settings.databaseId },
-                    cover: c ? { type: "external", external: { url: c } } : null,
-                    properties: {
+                
+                // Properties setup
+                const props = {
                         "名前": { title: [{ text: { content: safe(book.fullTitle) } }] },
                         "作品名": { rich_text: [{ text: { content: safe(book.seriesName) } }] },
                         ...(book.volume ? { "巻数": { number: parseInt(book.volume) } } : {}),
                         "著作者": { rich_text: [{ text: { content: safe(book.author) } }] },
                         "出版社": { rich_text: [{ text: { content: safe(book.publisher) } }] },
                         "ISBN": { rich_text: [{ text: { content: safe(book.isbn) } }] },
-                        ...(c ? { "書影URL": { url: c }, "書影": { files: [{ name: safe(book.fullTitle), type: "external", external: { url: c } }] } } : {})
-                    }
                 };
+
+                if (c) {
+                    // Fix: URL property limit check (2000 chars)
+                    if (c.length <= 2000) {
+                        props["書影URL"] = { url: c };
+                    }
+                    props["書影"] = { files: [{ name: safe(book.fullTitle), type: "external", external: { url: c } }] };
+                }
+
+                const body = {
+                    parent: { database_id: settings.databaseId },
+                    cover: c ? { type: "external", external: { url: c } } : null,
+                    properties: props
+                };
+
                 try {
                     const p = settings.proxyUrl;
                     const u = p.includes('corsproxy.io') ? p + encodeURIComponent('https://api.notion.com/v1/pages') : p + 'https://api.notion.com/v1/pages';
