@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Notion Manga Scanner v5.2.0</title>
+    <title>Notion Manga Scanner v5.3.0</title>
     <script>
         window.onerror = function(msg, url, line, col, error) {
             const div = document.createElement("div");
@@ -130,10 +130,11 @@
                             <div className="neu-flat w-10 h-10 flex items-center justify-center text-xl">📚</div>
                             <h1 className="text-xl font-bold tracking-wider text-[var(--text-main)]">SCANNER</h1>
                         </div>
-                        <div className="text-[10px] text-[var(--text-sub)] font-mono tracking-widest">V5.2.0</div>
+                        <div className="text-[10px] text-[var(--text-sub)] font-mono tracking-widest">V5.3.0</div>
                     </div>
                     <div className="flex-grow overflow-y-auto hide-scrollbar px-4 pb-32">
-                        {view === 'scan' && <ScannerView onDetected={addBook} />}
+                        {/* settings prop added to ScannerView */}
+                        {view === 'scan' && <ScannerView onDetected={addBook} settings={settings} />}
                         {view === 'history' && <HistoryView books={scannedBooks} settings={settings} setBooks={setScannedBooks} onUpdate={updateBook} />}
                         {view === 'settings' && <SettingsView settings={settings} setSettings={setSettings} />}
                     </div>
@@ -171,7 +172,8 @@
             );
         }
 
-        function ScannerView({ onDetected }) {
+        // Updated ScannerView to accept settings
+        function ScannerView({ onDetected, settings }) {
             const [scanning, setScanning] = useState(false);
             const [manualIsbn, setManualIsbn] = useState('');
             const [loading, setLoading] = useState(false);
@@ -190,6 +192,40 @@
 
             const stop = () => { if(scannerRef.current?.isScanning) scannerRef.current.stop().then(()=>scannerRef.current.clear()).catch(console.error); setScanning(false); };
 
+            // Function to search Notion for existing series
+            const searchNotionForSeries = async (seriesName) => {
+                if (!settings.notionToken || !settings.databaseId || !seriesName) return null;
+                try {
+                    let proxy = settings.proxyUrl || '';
+                    const target = `https://api.notion.com/v1/databases/${settings.databaseId}/query`;
+                    const url = proxy.includes('corsproxy.io') ? proxy + encodeURIComponent(target) : proxy + target;
+
+                    const response = await fetch(url, {
+                        method: "POST",
+                        headers: { "Authorization": `Bearer ${settings.notionToken}`, "Content-Type": "application/json", "Notion-Version": "2022-06-28" },
+                        body: JSON.stringify({
+                            filter: { property: "作品名", rich_text: { contains: seriesName } },
+                            page_size: 1,
+                            sorts: [{ timestamp: "created_time", direction: "descending" }]
+                        })
+                    });
+
+                    if (response.ok) {
+                        const data = await response.json();
+                        if (data.results && data.results.length > 0) {
+                            const props = data.results[0].properties;
+                            const getText = (p) => p?.rich_text?.[0]?.plain_text || p?.title?.[0]?.plain_text || "";
+                            return {
+                                seriesName: getText(props["作品名"]),
+                                author: getText(props["著作者"]),
+                                publisher: getText(props["出版社"])
+                            };
+                        }
+                    }
+                } catch (e) { console.error("Notion search failed", e); }
+                return null;
+            };
+
             const fetchBook = async (isbn) => {
                 setLoading(true);
                 try {
@@ -206,7 +242,7 @@
                         cover: ''
                     };
 
-                    // 1. OpenBD (最優先)
+                    // 1. OpenBD
                     try {
                         const res = await fetch(`https://api.openbd.jp/v1/get?isbn=${cleanIsbn}`);
                         const json = await res.json();
@@ -216,7 +252,6 @@
                             bookData.author = s.author;
                             bookData.publisher = s.publisher;
                             bookData.cover = s.cover;
-                            // ONIX Volume
                             try {
                                 const o = json[0].onix;
                                 const te = o?.DescriptiveDetail?.TitleDetail?.TitleElement;
@@ -227,7 +262,7 @@
                         }
                     } catch(e) { console.warn("OpenBD failed", e); }
 
-                    // 2. Google Books (ISBN) - 補完
+                    // 2. Google Books (ISBN)
                     if (!bookData.title || !bookData.cover) {
                         try {
                             const res = await fetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${cleanIsbn}`);
@@ -244,7 +279,7 @@
                         } catch(e) { console.warn("Google Books ISBN failed", e); }
                     }
 
-                    // 3. Google Books (Title Search) - 画像がない場合の強力なフォールバック
+                    // 3. Google Books (Title Search)
                     if (bookData.title && !bookData.cover) {
                         try {
                             const query = `${bookData.title} ${bookData.author}`.trim();
@@ -256,7 +291,7 @@
                         } catch(e) { console.warn("Google Books Title Search failed", e); }
                     }
 
-                    // 4. Open Library (Last Resort)
+                    // 4. Open Library
                     if (!bookData.cover) {
                         bookData.cover = `https://covers.openlibrary.org/b/isbn/${cleanIsbn}-L.jpg`;
                     }
@@ -268,6 +303,19 @@
 
                     const parsed = parseBookTitle(bookData.title, bookData.volume);
                     
+                    // --- 類似データ統合ロジック ---
+                    if (parsed.series) {
+                        const existingSeries = await searchNotionForSeries(parsed.series);
+                        if (existingSeries && existingSeries.seriesName) {
+                            if (confirm(`既存のシリーズ『${existingSeries.seriesName}』が見つかりました。\n情報をこのデータに統一しますか？`)) {
+                                parsed.series = existingSeries.seriesName;
+                                if (existingSeries.author) bookData.author = existingSeries.author;
+                                if (existingSeries.publisher) bookData.publisher = existingSeries.publisher;
+                            }
+                        }
+                    }
+                    // -------------------------
+
                     onDetected({
                         fullTitle: parsed.full,
                         seriesName: parsed.series,
