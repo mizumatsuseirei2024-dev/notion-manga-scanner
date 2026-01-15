@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Notion Manga Scanner v5.0.3</title>
+    <title>Notion Manga Scanner v5.1.0</title>
     <script>
         window.onerror = function(msg, url, line, col, error) {
             const div = document.createElement("div");
@@ -131,7 +131,7 @@
                             <div className="neu-flat w-10 h-10 flex items-center justify-center text-xl">📚</div>
                             <h1 className="text-xl font-bold tracking-wider text-[var(--text-main)]">SCANNER</h1>
                         </div>
-                        <div className="text-[10px] text-[var(--text-sub)] font-mono tracking-widest">V5.0.3</div>
+                        <div className="text-[10px] text-[var(--text-sub)] font-mono tracking-widest">V5.1.0</div>
                     </div>
                     <div className="flex-grow overflow-y-auto hide-scrollbar px-4 pb-32">
                         {view === 'scan' && <ScannerView onDetected={addBook} />}
@@ -238,9 +238,44 @@
             const [status, setStatus] = useState({});
             const [editing, setEditing] = useState(null);
 
-            const send = async (book) => {
-                if(!settings.notionToken) return alert("設定が必要です");
+            const send = async (book, silent = false) => {
+                if(!settings.notionToken) {
+                    if (!silent) alert("設定が必要です");
+                    return false;
+                }
                 setStatus(p=>({...p, [book.isbn]:'loading'}));
+
+                // --- 重複チェック ---
+                try {
+                    let proxy = settings.proxyUrl || '';
+                    // URL生成ヘルパー
+                    const getUrl = (target) => proxy.includes('corsproxy.io') ? proxy + encodeURIComponent(target) : proxy + target;
+                    
+                    const queryUrl = getUrl(`https://api.notion.com/v1/databases/${settings.databaseId}/query`);
+                    const queryRes = await fetch(queryUrl, {
+                        method: "POST",
+                        headers: { "Authorization": `Bearer ${settings.notionToken}`, "Content-Type": "application/json", "Notion-Version": "2022-06-28" },
+                        body: JSON.stringify({
+                            filter: { property: "ISBN", rich_text: { equals: book.isbn } }
+                        })
+                    });
+
+                    if (queryRes.ok) {
+                        const queryData = await queryRes.json();
+                        if (queryData.results && queryData.results.length > 0) {
+                            if (!silent) alert(`「${book.fullTitle}」は既に登録済みです。`);
+                            // リストから削除（成功扱い）
+                            setBooks(prev => prev.filter(b => b.isbn !== book.isbn));
+                            setStatus(p => { const n = { ...p }; delete n[book.isbn]; return n; });
+                            return true;
+                        }
+                    }
+                } catch(e) {
+                    console.error("Duplicate check failed:", e);
+                    // チェック失敗時はそのまま登録へ進むか、エラーにするか。ここでは進む。
+                }
+                // ------------------
+
                 let c = book.cover?.trim()||"";
                 if(c) { c=c.replace(/^http:\/\//i,'https://'); if(c.includes('books.google')||c.includes('googleapis')) c=c.replace('&edge=curl',''); }
                 const safe = t => t && String(t).trim().length>0 ? String(t) : "-";
@@ -261,15 +296,24 @@
                     const p = settings.proxyUrl;
                     const u = p.includes('corsproxy.io') ? p + encodeURIComponent('https://api.notion.com/v1/pages') : p + 'https://api.notion.com/v1/pages';
                     const r = await fetch(u, { method: "POST", headers: { "Authorization": `Bearer ${settings.notionToken}`, "Content-Type": "application/json", "Notion-Version": "2022-06-28" }, body: JSON.stringify(body) });
-                    if(r.ok) { setBooks(prev=>prev.filter(b=>b.isbn!==book.isbn)); setStatus(p=>{const n={...p}; delete n[book.isbn]; return n;}); }
+                    if(r.ok) { 
+                        setBooks(prev=>prev.filter(b=>b.isbn!==book.isbn)); 
+                        setStatus(p=>{const n={...p}; delete n[book.isbn]; return n;}); 
+                        return true;
+                    }
                     else throw new Error(await r.text());
-                } catch(e) { console.error(e); setStatus(p=>({...p, [book.isbn]:'error'})); alert("送信エラー: "+e.message); }
+                } catch(e) { 
+                    console.error(e); 
+                    setStatus(p=>({...p, [book.isbn]:'error'})); 
+                    if (!silent) alert("送信エラー: "+e.message); 
+                    return false;
+                }
             };
 
             const sendAll = async () => {
                 if(!books.length || !confirm("一括送信しますか？")) return;
                 const targets = [...books];
-                for(const b of targets) { await new Promise(r=>setTimeout(r,1000)); await send(b); }
+                for(const b of targets) { await new Promise(r=>setTimeout(r,1000)); await send(b, true); }
                 alert("完了");
             };
 
