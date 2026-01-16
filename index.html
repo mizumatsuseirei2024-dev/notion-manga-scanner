@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Notion Manga Scanner v5.4.1</title>
+    <title>Notion Manga Scanner v5.5.0</title>
     <script>
         window.onerror = function(msg, url, line, col, error) {
             const div = document.createElement("div");
@@ -73,7 +73,34 @@
         const Search = (props) => <Icon {...props}><circle cx="11" cy="11" r="8"/><line x1="21" x2="16.65" y1="21" y2="16.65"/></Icon>;
         const Edit2 = (props) => <Icon {...props}><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></Icon>;
 
-        // --- Logic ---
+        // --- Logic: Title Parsing & Fuzzy Matching ---
+        
+        // 1. 文字列の正規化（全角半角統一、小文字化、記号削除）
+        const normalizeString = (str) => {
+            if (!str) return "";
+            return str.replace(/[！-～]/g, s => String.fromCharCode(s.charCodeAt(0) - 0xFEE0))
+                      .toLowerCase()
+                      .replace(/[\s\t　：:－―\-\(\)\[\]（）\.,!！?？]/g, '');
+        };
+
+        // 2. レーベンシュタイン距離（編集距離）の計算
+        const getLevenshteinDistance = (a, b) => {
+            const an = a.length, bn = b.length;
+            if (an === 0) return bn;
+            if (bn === 0) return an;
+            const matrix = Array.from(Array(bn + 1), () => Array(an + 1).fill(0));
+            for (let i = 0; i <= an; i++) matrix[0][i] = i;
+            for (let j = 0; j <= bn; j++) matrix[j][0] = j;
+            for (let j = 1; j <= bn; j++) {
+                for (let i = 1; i <= an; i++) {
+                    const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+                    matrix[j][i] = Math.min(matrix[j - 1][i] + 1, matrix[j][i - 1] + 1, matrix[j - 1][i - 1] + cost);
+                }
+            }
+            return matrix[bn][an];
+        };
+
+        // 3. タイトル解析
         const parseBookTitle = (rawTitle, onixVolume = null) => {
             if (!rawTitle) return { full: "", series: "", volume: null };
             let title = rawTitle.replace(/[！-～]/g, s => String.fromCharCode(s.charCodeAt(0) - 0xFEE0)).trim().replace(/\s+/g, ' ');
@@ -130,10 +157,9 @@
                             <div className="neu-flat w-10 h-10 flex items-center justify-center text-xl">📚</div>
                             <h1 className="text-xl font-bold tracking-wider text-[var(--text-main)]">SCANNER</h1>
                         </div>
-                        <div className="text-[10px] text-[var(--text-sub)] font-mono tracking-widest">V5.4.1</div>
+                        <div className="text-[10px] text-[var(--text-sub)] font-mono tracking-widest">V5.5.0</div>
                     </div>
                     <div className="flex-grow overflow-y-auto hide-scrollbar px-4 pb-32">
-                        {/* settings prop added to ScannerView */}
                         {view === 'scan' && <ScannerView onDetected={addBook} settings={settings} />}
                         {view === 'history' && <HistoryView books={scannedBooks} settings={settings} setBooks={setScannedBooks} onUpdate={updateBook} />}
                         {view === 'settings' && <SettingsView settings={settings} setSettings={setSettings} />}
@@ -192,25 +218,28 @@
 
             const stop = () => { if(scannerRef.current?.isScanning) scannerRef.current.stop().then(()=>scannerRef.current.clear()).catch(console.error); setScanning(false); };
 
-            // Function to search Notion for existing series (Enhanced)
+            // Function to search Notion for existing series (Enhanced Fuzzy Search)
             const searchNotionForSeries = async (seriesName) => {
                 if (!settings.notionToken || !settings.databaseId || !seriesName) return null;
                 try {
-                    // 検索精度の向上: 記号をスペースに変換し、最初の意味のある単語(2文字以上)で検索する
+                    // 検索用キーワード: 記号を除去し、スペースで区切った最初のトークン(2文字以上)
+                    // "BORUTO : NARUTO..." -> "BORUTO"
                     const cleanName = seriesName.replace(/[：:－―\-\(\)\[\]（）]/g, ' ').trim();
-                    const words = cleanName.split(/\s+/);
-                    const keyword = words.find(w => w.length >= 2) || words[0] || seriesName;
+                    const words = cleanName.split(/\s+/).filter(w => w.length > 0);
+                    let keyword = words[0];
+                    if (!keyword || keyword.length < 2) keyword = seriesName;
 
                     let proxy = settings.proxyUrl || '';
                     const target = `https://api.notion.com/v1/databases/${settings.databaseId}/query`;
                     const url = proxy.includes('corsproxy.io') ? proxy + encodeURIComponent(target) : proxy + target;
 
+                    // 候補を広めに取得 (page_size: 10)
                     const response = await fetch(url, {
                         method: "POST",
                         headers: { "Authorization": `Bearer ${settings.notionToken}`, "Content-Type": "application/json", "Notion-Version": "2022-06-28" },
                         body: JSON.stringify({
                             filter: { property: "作品名", rich_text: { contains: keyword } },
-                            page_size: 1,
+                            page_size: 10,
                             sorts: [{ timestamp: "created_time", direction: "descending" }]
                         })
                     });
@@ -218,13 +247,43 @@
                     if (response.ok) {
                         const data = await response.json();
                         if (data.results && data.results.length > 0) {
-                            const props = data.results[0].properties;
-                            const getText = (p) => p?.rich_text?.[0]?.plain_text || p?.title?.[0]?.plain_text || "";
-                            return {
-                                seriesName: getText(props["作品名"]),
-                                author: getText(props["著作者"]),
-                                publisher: getText(props["出版社"])
-                            };
+                            const normTarget = normalizeString(seriesName);
+                            let bestMatch = null;
+                            let bestDistance = Infinity;
+
+                            for (const page of data.results) {
+                                const props = page.properties;
+                                const getText = (p) => p?.rich_text?.[0]?.plain_text || p?.title?.[0]?.plain_text || "";
+                                const existingSeriesName = getText(props["作品名"]);
+                                
+                                // 正規化して距離計算
+                                const normExisting = normalizeString(existingSeriesName);
+                                const dist = getLevenshteinDistance(normTarget, normExisting);
+                                
+                                // 正規化後の文字列が、お互いに含まれているかどうかもチェック（部分一致強化）
+                                if (normTarget.includes(normExisting) || normExisting.includes(normTarget)) {
+                                    // ほぼ確実
+                                    return {
+                                        seriesName: existingSeriesName,
+                                        author: getText(props["著作者"]),
+                                        publisher: getText(props["出版社"])
+                                    };
+                                }
+
+                                if (dist < bestDistance) {
+                                    bestDistance = dist;
+                                    bestMatch = {
+                                        seriesName: existingSeriesName,
+                                        author: getText(props["著作者"]),
+                                        publisher: getText(props["出版社"])
+                                    };
+                                }
+                            }
+
+                            // 距離が短ければ採用 (閾値は文字列長の30%程度とする)
+                            if (bestMatch && bestDistance <= Math.max(normTarget.length, 3) * 0.4) {
+                                return bestMatch;
+                            }
                         }
                     }
                 } catch (e) { console.error("Notion search failed", e); }
@@ -312,7 +371,7 @@
                     if (parsed.series) {
                         const existingSeries = await searchNotionForSeries(parsed.series);
                         if (existingSeries && existingSeries.seriesName) {
-                            if (confirm(`既存のシリーズ『${existingSeries.seriesName}』が見つかりました。\n情報をこのデータに統一しますか？`)) {
+                            if (confirm(`類似するシリーズが見つかりました。\n\n【登録済み】\nタイトル: ${existingSeries.seriesName}\n著者: ${existingSeries.author}\n\n【スキャン結果】\nタイトル: ${parsed.series}\n著者: ${bookData.author}\n\n登録済みのデータに合わせて修正しますか？`)) {
                                 parsed.series = existingSeries.seriesName;
                                 if (existingSeries.author) bookData.author = existingSeries.author;
                                 if (existingSeries.publisher) bookData.publisher = existingSeries.publisher;
