@@ -231,6 +231,7 @@
                         <div className="text-[10px] text-[var(--text-sub)] font-mono tracking-widest">V5.6.0</div>
                     </div>
                     <div className="flex-grow overflow-y-auto hide-scrollbar px-4 pb-32">
+                        {/* settings prop added to ScannerView */}
                         {view === 'scan' && <ScannerView onDetected={addBook} settings={settings} />}
                         {view === 'bulk' && <BulkImportView onDetected={addBook} setView={setView} />}
                         {view === 'history' && <HistoryView books={scannedBooks} settings={settings} setBooks={setScannedBooks} onUpdate={updateBook} />}
