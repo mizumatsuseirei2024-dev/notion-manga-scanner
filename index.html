@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Notion Manga Scanner v5.5.0</title>
+    <title>Notion Manga Scanner v5.6.0</title>
     <script>
         window.onerror = function(msg, url, line, col, error) {
             const div = document.createElement("div");
@@ -69,13 +69,12 @@
         const ScanLine = (props) => <Icon {...props}><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><line x1="7" x2="17" y1="12" y2="12"/></Icon>;
         const ListIcon = (props) => <Icon {...props}><line x1="8" x2="21" y1="6" y2="6"/><line x1="8" x2="21" y1="12" y2="12"/><line x1="8" x2="21" y1="18" y2="18"/><line x1="3" x2="3.01" y1="6" y2="6"/><line x1="3" x2="3.01" y1="12" y2="12"/><line x1="3" x2="3.01" y1="18" y2="18"/></Icon>;
         const SettingsIcon = (props) => <Icon {...props}><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.47a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></Icon>;
+        const ImportIcon = (props) => <Icon {...props}><path d="M12 3v12"/><path d="m8 11 4 4 4-4"/><path d="M8 5H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-4"/></Icon>;
         const X = (props) => <Icon {...props}><path d="M18 6 6 18"/><path d="m6 6 12 12"/></Icon>;
         const Search = (props) => <Icon {...props}><circle cx="11" cy="11" r="8"/><line x1="21" x2="16.65" y1="21" y2="16.65"/></Icon>;
         const Edit2 = (props) => <Icon {...props}><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></Icon>;
 
         // --- Logic: Title Parsing & Fuzzy Matching ---
-        
-        // 1. 文字列の正規化（全角半角統一、小文字化、記号削除）
         const normalizeString = (str) => {
             if (!str) return "";
             return str.replace(/[！-～]/g, s => String.fromCharCode(s.charCodeAt(0) - 0xFEE0))
@@ -83,7 +82,6 @@
                       .replace(/[\s\t　：:－―\-\(\)\[\]（）\.,!！?？]/g, '');
         };
 
-        // 2. レーベンシュタイン距離（編集距離）の計算
         const getLevenshteinDistance = (a, b) => {
             const an = a.length, bn = b.length;
             if (an === 0) return bn;
@@ -100,7 +98,6 @@
             return matrix[bn][an];
         };
 
-        // 3. タイトル解析
         const parseBookTitle = (rawTitle, onixVolume = null) => {
             if (!rawTitle) return { full: "", series: "", volume: null };
             let title = rawTitle.replace(/[！-～]/g, s => String.fromCharCode(s.charCodeAt(0) - 0xFEE0)).trim().replace(/\s+/g, ' ');
@@ -116,6 +113,80 @@
                 volume = parseInt(match[2], 10);
             }
             return { full: rawTitle, series: seriesName, volume };
+        };
+
+        // --- Logic: Book Fetching (Shared) ---
+        const fetchBookInfo = async (isbn) => {
+            try {
+                const cleanIsbn = isbn.replace(/[^0-9]/g, '');
+                if (cleanIsbn.length !== 13) throw new Error("13桁のISBNを入力");
+
+                let bookData = { isbn: cleanIsbn, title: '', seriesName: '', volume: null, author: '', publisher: '', cover: '' };
+
+                // 1. OpenBD
+                try {
+                    const res = await fetch(`https://api.openbd.jp/v1/get?isbn=${cleanIsbn}`);
+                    const json = await res.json();
+                    if (json && json[0]) {
+                        const s = json[0].summary;
+                        bookData.title = s.title;
+                        bookData.author = s.author;
+                        bookData.publisher = s.publisher;
+                        bookData.cover = s.cover;
+                        try {
+                            const o = json[0].onix;
+                            const te = o?.DescriptiveDetail?.TitleDetail?.TitleElement;
+                            const els = Array.isArray(te) ? te : [te];
+                            const pel = els?.find(e => e?.PartNumber);
+                            if (pel) bookData.volume = pel.PartNumber;
+                        } catch(e){}
+                    }
+                } catch(e) { console.warn("OpenBD failed", e); }
+
+                // 2. Google Books (ISBN)
+                if (!bookData.title || !bookData.cover) {
+                    try {
+                        const res = await fetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${cleanIsbn}`);
+                        const json = await res.json();
+                        if (json.items?.[0]?.volumeInfo) {
+                            const info = json.items[0].volumeInfo;
+                            if (!bookData.title) bookData.title = info.title;
+                            if (!bookData.author && info.authors) bookData.author = info.authors.join(', ');
+                            if (!bookData.publisher && info.publisher) bookData.publisher = info.publisher;
+                            if (!bookData.cover && info.imageLinks?.thumbnail) bookData.cover = info.imageLinks.thumbnail.replace(/^http:\/\//, 'https://');
+                        }
+                    } catch(e) { console.warn("Google Books ISBN failed", e); }
+                }
+
+                // 3. Google Books (Title Search)
+                if (bookData.title && !bookData.cover) {
+                    try {
+                        const query = `${bookData.title} ${bookData.author}`.trim();
+                        const res = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(query)}&maxResults=1`);
+                        const json = await res.json();
+                        if (json.items?.[0]?.volumeInfo?.imageLinks?.thumbnail) bookData.cover = json.items[0].volumeInfo.imageLinks.thumbnail.replace(/^http:\/\//, 'https://');
+                    } catch(e) { console.warn("Google Books Title Search failed", e); }
+                }
+
+                // 4. Open Library
+                if (!bookData.cover) bookData.cover = `https://covers.openlibrary.org/b/isbn/${cleanIsbn}-L.jpg`;
+
+                if (!bookData.title) throw new Error("データなし");
+
+                const parsed = parseBookTitle(bookData.title, bookData.volume);
+                return {
+                    fullTitle: parsed.full,
+                    seriesName: parsed.series,
+                    volume: parsed.volume,
+                    author: bookData.author,
+                    publisher: bookData.publisher,
+                    isbn: bookData.isbn,
+                    cover: bookData.cover
+                };
+            } catch (e) {
+                console.error(e);
+                return null;
+            }
         };
 
         // --- Components ---
@@ -157,10 +228,11 @@
                             <div className="neu-flat w-10 h-10 flex items-center justify-center text-xl">📚</div>
                             <h1 className="text-xl font-bold tracking-wider text-[var(--text-main)]">SCANNER</h1>
                         </div>
-                        <div className="text-[10px] text-[var(--text-sub)] font-mono tracking-widest">V5.5.0</div>
+                        <div className="text-[10px] text-[var(--text-sub)] font-mono tracking-widest">V5.6.0</div>
                     </div>
                     <div className="flex-grow overflow-y-auto hide-scrollbar px-4 pb-32">
                         {view === 'scan' && <ScannerView onDetected={addBook} settings={settings} />}
+                        {view === 'bulk' && <BulkImportView onDetected={addBook} setView={setView} />}
                         {view === 'history' && <HistoryView books={scannedBooks} settings={settings} setBooks={setScannedBooks} onUpdate={updateBook} />}
                         {view === 'settings' && <SettingsView settings={settings} setSettings={setSettings} />}
                     </div>
@@ -173,6 +245,7 @@
             const [isOpen, setIsOpen] = useState(false);
             const items = [
                 { id: 'scan', icon: ScanLine, color: '#00d1b2' },
+                { id: 'bulk', icon: ImportIcon, color: '#FF9F1C' }, // New Item
                 { id: 'history', icon: ListIcon, color: '#ff0080' },
                 { id: 'settings', icon: SettingsIcon, color: '#7928ca' },
             ];
@@ -180,7 +253,11 @@
                 <div className="fixed bottom-8 right-8 z-50 flex items-center justify-center">
                     <div className={`absolute transition-all duration-300 ${isOpen?'scale-100 opacity-100':'scale-50 opacity-0 pointer-events-none'}`}>
                         {items.map((it, i) => {
-                            const rad = 90, ang = (i*90/(items.length-1))+180;
+                            const total = items.length - 1;
+                            const range = 90; // 90 degrees range (180 to 270)
+                            const startAngle = 180;
+                            const ang = startAngle + (i * range / total);
+                            const rad = 90;
                             const x = Math.cos(ang*Math.PI/180)*rad, y = Math.sin(ang*Math.PI/180)*rad;
                             const active = currentView === it.id;
                             return (
@@ -198,7 +275,7 @@
             );
         }
 
-        // Updated ScannerView to accept settings
+        // Updated ScannerView to use shared logic
         function ScannerView({ onDetected, settings }) {
             const [scanning, setScanning] = useState(false);
             const [manualIsbn, setManualIsbn] = useState('');
@@ -210,7 +287,7 @@
                 const s = new Html5Qrcode("reader");
                 scannerRef.current = s;
                 s.start({ facingMode: "environment" }, { fps: 10, qrbox: { width: 250, height: 150 }, aspect: 1.0, formatsToSupport: [ Html5QrcodeSupportedFormats.EAN_13 ] }, 
-                    (d) => { if (d.startsWith('978')) { stop(); fetchBook(d); } }, 
+                    (d) => { if (d.startsWith('978')) { stop(); processIsbn(d); } }, 
                     () => {}
                 ).catch(e => { console.error(e); setScanning(false); alert("カメラ起動エラー: " + e); });
                 return () => stop();
@@ -218,12 +295,9 @@
 
             const stop = () => { if(scannerRef.current?.isScanning) scannerRef.current.stop().then(()=>scannerRef.current.clear()).catch(console.error); setScanning(false); };
 
-            // Function to search Notion for existing series (Enhanced Fuzzy Search)
             const searchNotionForSeries = async (seriesName) => {
                 if (!settings.notionToken || !settings.databaseId || !seriesName) return null;
                 try {
-                    // 検索用キーワード: 記号を除去し、スペースで区切った最初のトークン(2文字以上)
-                    // "BORUTO : NARUTO..." -> "BORUTO"
                     const cleanName = seriesName.replace(/[：:－―\-\(\)\[\]（）]/g, ' ').trim();
                     const words = cleanName.split(/\s+/).filter(w => w.length > 0);
                     let keyword = words[0];
@@ -233,7 +307,6 @@
                     const target = `https://api.notion.com/v1/databases/${settings.databaseId}/query`;
                     const url = proxy.includes('corsproxy.io') ? proxy + encodeURIComponent(target) : proxy + target;
 
-                    // 候補を広めに取得 (page_size: 10)
                     const response = await fetch(url, {
                         method: "POST",
                         headers: { "Authorization": `Bearer ${settings.notionToken}`, "Content-Type": "application/json", "Notion-Version": "2022-06-28" },
@@ -255,142 +328,42 @@
                                 const props = page.properties;
                                 const getText = (p) => p?.rich_text?.[0]?.plain_text || p?.title?.[0]?.plain_text || "";
                                 const existingSeriesName = getText(props["作品名"]);
-                                
-                                // 正規化して距離計算
                                 const normExisting = normalizeString(existingSeriesName);
                                 const dist = getLevenshteinDistance(normTarget, normExisting);
-                                
-                                // 正規化後の文字列が、お互いに含まれているかどうかもチェック（部分一致強化）
                                 if (normTarget.includes(normExisting) || normExisting.includes(normTarget)) {
-                                    // ほぼ確実
-                                    return {
-                                        seriesName: existingSeriesName,
-                                        author: getText(props["著作者"]),
-                                        publisher: getText(props["出版社"])
-                                    };
+                                    return { seriesName: existingSeriesName, author: getText(props["著作者"]), publisher: getText(props["出版社"]) };
                                 }
-
                                 if (dist < bestDistance) {
                                     bestDistance = dist;
-                                    bestMatch = {
-                                        seriesName: existingSeriesName,
-                                        author: getText(props["著作者"]),
-                                        publisher: getText(props["出版社"])
-                                    };
+                                    bestMatch = { seriesName: existingSeriesName, author: getText(props["著作者"]), publisher: getText(props["出版社"]) };
                                 }
                             }
-
-                            // 距離が短ければ採用 (閾値は文字列長の30%程度とする)
-                            if (bestMatch && bestDistance <= Math.max(normTarget.length, 3) * 0.4) {
-                                return bestMatch;
-                            }
+                            if (bestMatch && bestDistance <= Math.max(normTarget.length, 3) * 0.4) return bestMatch;
                         }
                     }
                 } catch (e) { console.error("Notion search failed", e); }
                 return null;
             };
 
-            const fetchBook = async (isbn) => {
+            const processIsbn = async (isbn) => {
                 setLoading(true);
                 try {
-                    const cleanIsbn = isbn.replace(/[^0-9]/g, '');
-                    if (cleanIsbn.length !== 13) throw new Error("13桁のISBNを入力");
+                    const book = await fetchBookInfo(isbn);
+                    if (!book) throw new Error("データなし");
 
-                    let bookData = {
-                        isbn: cleanIsbn,
-                        title: '',
-                        seriesName: '',
-                        volume: null,
-                        author: '',
-                        publisher: '',
-                        cover: ''
-                    };
-
-                    // 1. OpenBD
-                    try {
-                        const res = await fetch(`https://api.openbd.jp/v1/get?isbn=${cleanIsbn}`);
-                        const json = await res.json();
-                        if (json && json[0]) {
-                            const s = json[0].summary;
-                            bookData.title = s.title;
-                            bookData.author = s.author;
-                            bookData.publisher = s.publisher;
-                            bookData.cover = s.cover;
-                            try {
-                                const o = json[0].onix;
-                                const te = o?.DescriptiveDetail?.TitleDetail?.TitleElement;
-                                const els = Array.isArray(te) ? te : [te];
-                                const pel = els?.find(e => e?.PartNumber);
-                                if (pel) bookData.volume = pel.PartNumber;
-                            } catch(e){}
-                        }
-                    } catch(e) { console.warn("OpenBD failed", e); }
-
-                    // 2. Google Books (ISBN)
-                    if (!bookData.title || !bookData.cover) {
-                        try {
-                            const res = await fetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${cleanIsbn}`);
-                            const json = await res.json();
-                            if (json.items?.[0]?.volumeInfo) {
-                                const info = json.items[0].volumeInfo;
-                                if (!bookData.title) bookData.title = info.title;
-                                if (!bookData.author && info.authors) bookData.author = info.authors.join(', ');
-                                if (!bookData.publisher && info.publisher) bookData.publisher = info.publisher;
-                                if (!bookData.cover && info.imageLinks?.thumbnail) {
-                                    bookData.cover = info.imageLinks.thumbnail.replace(/^http:\/\//, 'https://');
-                                }
-                            }
-                        } catch(e) { console.warn("Google Books ISBN failed", e); }
-                    }
-
-                    // 3. Google Books (Title Search)
-                    if (bookData.title && !bookData.cover) {
-                        try {
-                            const query = `${bookData.title} ${bookData.author}`.trim();
-                            const res = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(query)}&maxResults=1`);
-                            const json = await res.json();
-                            if (json.items?.[0]?.volumeInfo?.imageLinks?.thumbnail) {
-                                bookData.cover = json.items[0].volumeInfo.imageLinks.thumbnail.replace(/^http:\/\//, 'https://');
-                            }
-                        } catch(e) { console.warn("Google Books Title Search failed", e); }
-                    }
-
-                    // 4. Open Library
-                    if (!bookData.cover) {
-                        bookData.cover = `https://covers.openlibrary.org/b/isbn/${cleanIsbn}-L.jpg`;
-                    }
-
-                    if (!bookData.title) {
-                        alert("データなし");
-                        return;
-                    }
-
-                    const parsed = parseBookTitle(bookData.title, bookData.volume);
-                    
-                    // --- 類似データ統合ロジック ---
-                    if (parsed.series) {
-                        const existingSeries = await searchNotionForSeries(parsed.series);
-                        if (existingSeries && existingSeries.seriesName) {
-                            if (confirm(`類似するシリーズが見つかりました。\n\n【登録済み】\nタイトル: ${existingSeries.seriesName}\n著者: ${existingSeries.author}\n\n【スキャン結果】\nタイトル: ${parsed.series}\n著者: ${bookData.author}\n\n登録済みのデータに合わせて修正しますか？`)) {
-                                parsed.series = existingSeries.seriesName;
-                                if (existingSeries.author) bookData.author = existingSeries.author;
-                                if (existingSeries.publisher) bookData.publisher = existingSeries.publisher;
+                    // 類似データ統合ロジック
+                    if (book.seriesName) {
+                        const existing = await searchNotionForSeries(book.seriesName);
+                        if (existing) {
+                            if (confirm(`類似シリーズ『${existing.seriesName}』が見つかりました。\n情報を統一しますか？`)) {
+                                book.seriesName = existing.seriesName;
+                                if (existing.author) book.author = existing.author;
+                                if (existing.publisher) book.publisher = existing.publisher;
                             }
                         }
                     }
-                    // -------------------------
-
-                    onDetected({
-                        fullTitle: parsed.full,
-                        seriesName: parsed.series,
-                        volume: parsed.volume,
-                        author: bookData.author,
-                        publisher: bookData.publisher,
-                        isbn: bookData.isbn,
-                        cover: bookData.cover
-                    });
+                    onDetected(book);
                     setManualIsbn('');
-
                 } catch(e) { alert(e.message); } finally { setLoading(false); }
             };
 
@@ -402,8 +375,88 @@
                         {scanning && <div className="absolute inset-0 pointer-events-none border-2 border-[var(--accent)]/50 rounded-2xl animate-pulse"></div>}
                     </div>
                     {scanning && <button onClick={stop} className="neu-btn px-6 py-2 text-sm text-red-400 font-bold">STOP</button>}
-                    <div className="w-full max-w-xs"><div className="neu-pressed flex items-center p-2 rounded-full"><input type="tel" placeholder="ISBN (978...)" value={manualIsbn} onChange={e=>setManualIsbn(e.target.value)} className="bg-transparent border-none outline-none text-[var(--text-main)] px-4 py-2 flex-grow font-mono text-lg" maxLength="13"/><button onClick={()=>{fetchBook(manualIsbn)}} disabled={loading||manualIsbn.length<10} className={`w-10 h-10 rounded-full flex items-center justify-center transition-all ${manualIsbn.length>=10?'bg-[var(--accent)] text-[#292d3e]':'text-gray-500'}`}><Search size={18}/></button></div></div>
+                    <div className="w-full max-w-xs"><div className="neu-pressed flex items-center p-2 rounded-full"><input type="tel" placeholder="ISBN (978...)" value={manualIsbn} onChange={e=>setManualIsbn(e.target.value)} className="bg-transparent border-none outline-none text-[var(--text-main)] px-4 py-2 flex-grow font-mono text-lg" maxLength="13"/><button onClick={()=>{processIsbn(manualIsbn)}} disabled={loading||manualIsbn.length<10} className={`w-10 h-10 rounded-full flex items-center justify-center transition-all ${manualIsbn.length>=10?'bg-[var(--accent)] text-[#292d3e]':'text-gray-500'}`}><Search size={18}/></button></div></div>
                     {loading && <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center"><div className="neu-flat p-8 flex flex-col items-center animate-pop"><div className="w-10 h-10 border-4 border-[var(--accent)] border-t-transparent rounded-full animate-spin mb-4"></div><span className="font-bold tracking-widest text-sm">SEARCHING...</span></div></div>}
+                </div>
+            );
+        }
+
+        // New BulkImportView
+        function BulkImportView({ onDetected, setView }) {
+            const [text, setText] = useState('');
+            const [processing, setProcessing] = useState(false);
+            const [progress, setProgress] = useState({ current: 0, total: 0 });
+            const [logs, setLogs] = useState([]);
+
+            const handleBulk = async () => {
+                const isbns = text.match(/978[0-9-]{10,14}/g);
+                if (!isbns || isbns.length === 0) return alert("ISBNが見つかりません (978から始まる数字)");
+                
+                // 重複除去
+                const uniqueIsbns = [...new Set(isbns.map(i => i.replace(/[^0-9]/g, '')))];
+                
+                setProcessing(true);
+                setProgress({ current: 0, total: uniqueIsbns.length });
+                setLogs([]);
+
+                for (let i = 0; i < uniqueIsbns.length; i++) {
+                    setProgress(prev => ({ ...prev, current: i + 1 }));
+                    const isbn = uniqueIsbns[i];
+                    
+                    try {
+                        const book = await fetchBookInfo(isbn);
+                        if (book) {
+                            onDetected(book); // Add to list directly
+                            setLogs(prev => [`✅ ${book.fullTitle}`, ...prev]);
+                        } else {
+                            setLogs(prev => [`❌ ${isbn} (データなし)`, ...prev]);
+                        }
+                    } catch (e) {
+                        setLogs(prev => [`❌ ${isbn} (エラー)`, ...prev]);
+                    }
+                    
+                    // APIレート制限考慮
+                    await new Promise(r => setTimeout(r, 1000));
+                }
+                setProcessing(false);
+                alert("一括取得完了。LIST画面で確認してください。");
+                setView('history');
+            };
+
+            return (
+                <div className="pt-4 space-y-6 animate-fade-in h-full flex flex-col">
+                    <div className="neu-flat p-5 flex-grow flex flex-col">
+                        <h3 className="font-bold text-[var(--accent)] mb-2 flex items-center gap-2"><ImportIcon size={18}/> 一括登録 (BULK)</h3>
+                        <p className="text-xs text-[var(--text-sub)] mb-4">ISBNを貼り付けてください（改行・スペース区切りOK）</p>
+                        
+                        <div className="neu-pressed p-2 flex-grow mb-4 rounded-xl">
+                            <textarea 
+                                value={text}
+                                onChange={e => setText(e.target.value)}
+                                placeholder="9784..."
+                                className="w-full h-full bg-transparent border-none outline-none text-[var(--text-main)] text-sm resize-none font-mono"
+                            ></textarea>
+                        </div>
+
+                        <button 
+                            onClick={handleBulk} 
+                            disabled={processing || !text}
+                            className={`w-full py-3 rounded-xl font-bold text-sm shadow-lg transition-all ${processing ? 'bg-gray-600 text-gray-400' : 'bg-[var(--accent)] text-[#292d3e] hover:brightness-110'}`}
+                        >
+                            {processing ? `取得中 (${progress.current}/${progress.total})...` : '一括取得開始'}
+                        </button>
+                    </div>
+
+                    {logs.length > 0 && (
+                        <div className="neu-flat p-4 max-h-40 overflow-y-auto">
+                            <h4 className="text-xs font-bold text-[var(--text-sub)] mb-2">ログ</h4>
+                            <ul className="space-y-1">
+                                {logs.map((log, i) => (
+                                    <li key={i} className="text-xs truncate">{log}</li>
+                                ))}
+                            </ul>
+                        </div>
+                    )}
                 </div>
             );
         }
