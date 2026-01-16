@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Notion Manga Scanner v5.6.1</title>
+    <title>Notion Manga Scanner v5.6.3</title>
     <script>
         window.onerror = function(msg, url, line, col, error) {
             const div = document.createElement("div");
@@ -115,6 +115,16 @@
             return { full: rawTitle, series: seriesName, volume };
         };
 
+        // --- Logic: Author Name Cleaning ---
+        const cleanAuthorName = (author) => {
+            if (!author) return "";
+            // カンマをスペースに置換
+            let cleaned = author.replace(/,/g, ' ');
+            // 連続するスペースを1つに
+            cleaned = cleaned.replace(/\s+/g, ' ');
+            return cleaned.trim();
+        };
+
         // --- Logic: Book Fetching (Shared) ---
         const fetchBookInfo = async (isbn) => {
             try {
@@ -130,7 +140,7 @@
                     if (json && json[0]) {
                         const s = json[0].summary;
                         bookData.title = s.title;
-                        bookData.author = s.author;
+                        bookData.author = cleanAuthorName(s.author);
                         bookData.publisher = s.publisher;
                         bookData.cover = s.cover;
                         try {
@@ -151,7 +161,7 @@
                         if (json.items?.[0]?.volumeInfo) {
                             const info = json.items[0].volumeInfo;
                             if (!bookData.title) bookData.title = info.title;
-                            if (!bookData.author && info.authors) bookData.author = info.authors.join(', ');
+                            if (!bookData.author && info.authors) bookData.author = cleanAuthorName(info.authors.join(' ')); // スペースで結合
                             if (!bookData.publisher && info.publisher) bookData.publisher = info.publisher;
                             if (!bookData.cover && info.imageLinks?.thumbnail) bookData.cover = info.imageLinks.thumbnail.replace(/^http:\/\//, 'https://');
                         }
@@ -238,7 +248,7 @@
                             <div className="neu-flat w-10 h-10 flex items-center justify-center text-xl">📚</div>
                             <h1 className="text-xl font-bold tracking-wider text-[var(--text-main)]">SCANNER</h1>
                         </div>
-                        <div className="text-[10px] text-[var(--text-sub)] font-mono tracking-widest">V5.6.1</div>
+                        <div className="text-[10px] text-[var(--text-sub)] font-mono tracking-widest">V5.6.3</div>
                     </div>
                     <div className="flex-grow overflow-y-auto hide-scrollbar px-4 pb-32">
                         {/* settings prop added to ScannerView */}
