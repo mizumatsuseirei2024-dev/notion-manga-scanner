@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Notion Manga Scanner v5.6.0</title>
+    <title>Notion Manga Scanner v5.6.1</title>
     <script>
         window.onerror = function(msg, url, line, col, error) {
             const div = document.createElement("div");
@@ -219,6 +219,16 @@
                 if (navigator.vibrate) navigator.vibrate(50);
                 setView('history');
             };
+
+            const addBooksBulk = (newBooks) => {
+                const uniqueNewBooks = newBooks.filter(b => !scannedBooks.some(exist => exist.isbn === b.isbn));
+                if (uniqueNewBooks.length > 0) {
+                    setScannedBooks(prev => [...uniqueNewBooks, ...prev]);
+                    if (navigator.vibrate) navigator.vibrate(200);
+                }
+                setView('history');
+            };
+
             const updateBook = (ub) => setScannedBooks(scannedBooks.map(b => b.isbn === ub.isbn ? ub : b));
 
             return (
@@ -228,12 +238,12 @@
                             <div className="neu-flat w-10 h-10 flex items-center justify-center text-xl">📚</div>
                             <h1 className="text-xl font-bold tracking-wider text-[var(--text-main)]">SCANNER</h1>
                         </div>
-                        <div className="text-[10px] text-[var(--text-sub)] font-mono tracking-widest">V5.6.0</div>
+                        <div className="text-[10px] text-[var(--text-sub)] font-mono tracking-widest">V5.6.1</div>
                     </div>
                     <div className="flex-grow overflow-y-auto hide-scrollbar px-4 pb-32">
                         {/* settings prop added to ScannerView */}
                         {view === 'scan' && <ScannerView onDetected={addBook} settings={settings} />}
-                        {view === 'bulk' && <BulkImportView onDetected={addBook} setView={setView} />}
+                        {view === 'bulk' && <BulkImportView onBulkDetected={addBooksBulk} />}
                         {view === 'history' && <HistoryView books={scannedBooks} settings={settings} setBooks={setScannedBooks} onUpdate={updateBook} />}
                         {view === 'settings' && <SettingsView settings={settings} setSettings={setSettings} />}
                     </div>
@@ -383,7 +393,7 @@
         }
 
         // New BulkImportView
-        function BulkImportView({ onDetected, setView }) {
+        function BulkImportView({ onBulkDetected }) {
             const [text, setText] = useState('');
             const [processing, setProcessing] = useState(false);
             const [progress, setProgress] = useState({ current: 0, total: 0 });
@@ -400,6 +410,8 @@
                 setProgress({ current: 0, total: uniqueIsbns.length });
                 setLogs([]);
 
+                const acquiredBooks = [];
+
                 for (let i = 0; i < uniqueIsbns.length; i++) {
                     setProgress(prev => ({ ...prev, current: i + 1 }));
                     const isbn = uniqueIsbns[i];
@@ -407,7 +419,7 @@
                     try {
                         const book = await fetchBookInfo(isbn);
                         if (book) {
-                            onDetected(book); // Add to list directly
+                            acquiredBooks.push(book);
                             setLogs(prev => [`✅ ${book.fullTitle}`, ...prev]);
                         } else {
                             setLogs(prev => [`❌ ${isbn} (データなし)`, ...prev]);
@@ -419,9 +431,15 @@
                     // APIレート制限考慮
                     await new Promise(r => setTimeout(r, 1000));
                 }
+                
                 setProcessing(false);
-                alert("一括取得完了。LIST画面で確認してください。");
-                setView('history');
+                
+                if (acquiredBooks.length > 0) {
+                    onBulkDetected(acquiredBooks);
+                    alert(`${acquiredBooks.length}冊を取得しました。リスト画面へ移動します。`);
+                } else {
+                    alert("書籍情報を取得できませんでした。");
+                }
             };
 
             return (
