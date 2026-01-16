@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Notion Manga Scanner v5.6.3</title>
+    <title>Notion Manga Scanner v5.6.4</title>
     <script>
         window.onerror = function(msg, url, line, col, error) {
             const div = document.createElement("div");
@@ -161,7 +161,7 @@
                         if (json.items?.[0]?.volumeInfo) {
                             const info = json.items[0].volumeInfo;
                             if (!bookData.title) bookData.title = info.title;
-                            if (!bookData.author && info.authors) bookData.author = cleanAuthorName(info.authors.join(' ')); // スペースで結合
+                            if (!bookData.author && info.authors) bookData.author = cleanAuthorName(info.authors.join(' '));
                             if (!bookData.publisher && info.publisher) bookData.publisher = info.publisher;
                             if (!bookData.cover && info.imageLinks?.thumbnail) bookData.cover = info.imageLinks.thumbnail.replace(/^http:\/\//, 'https://');
                         }
@@ -197,6 +197,58 @@
                 console.error(e);
                 return null;
             }
+        };
+
+        // --- Logic: Notion Search (Shared) ---
+        const searchNotionForSeries = async (seriesName, settings) => {
+            if (!settings.notionToken || !settings.databaseId || !seriesName) return null;
+            try {
+                // 検索精度の向上: 記号をスペースに変換し、最初の意味のある単語(2文字以上)で検索する
+                const cleanName = seriesName.replace(/[：:－―\-\(\)\[\]（）]/g, ' ').trim();
+                const words = cleanName.split(/\s+/).filter(w => w.length > 0);
+                let keyword = words[0];
+                if (!keyword || keyword.length < 2) keyword = seriesName;
+
+                let proxy = settings.proxyUrl || '';
+                const target = `https://api.notion.com/v1/databases/${settings.databaseId}/query`;
+                const url = proxy.includes('corsproxy.io') ? proxy + encodeURIComponent(target) : proxy + target;
+
+                const response = await fetch(url, {
+                    method: "POST",
+                    headers: { "Authorization": `Bearer ${settings.notionToken}`, "Content-Type": "application/json", "Notion-Version": "2022-06-28" },
+                    body: JSON.stringify({
+                        filter: { property: "作品名", rich_text: { contains: keyword } },
+                        page_size: 10,
+                        sorts: [{ timestamp: "created_time", direction: "descending" }]
+                    })
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.results && data.results.length > 0) {
+                        const normTarget = normalizeString(seriesName);
+                        let bestMatch = null;
+                        let bestDistance = Infinity;
+
+                        for (const page of data.results) {
+                            const props = page.properties;
+                            const getText = (p) => p?.rich_text?.[0]?.plain_text || p?.title?.[0]?.plain_text || "";
+                            const existingSeriesName = getText(props["作品名"]);
+                            const normExisting = normalizeString(existingSeriesName);
+                            const dist = getLevenshteinDistance(normTarget, normExisting);
+                            if (normTarget.includes(normExisting) || normExisting.includes(normTarget)) {
+                                return { seriesName: existingSeriesName, author: getText(props["著作者"]), publisher: getText(props["出版社"]) };
+                            }
+                            if (dist < bestDistance) {
+                                bestDistance = dist;
+                                bestMatch = { seriesName: existingSeriesName, author: getText(props["著作者"]), publisher: getText(props["出版社"]) };
+                            }
+                        }
+                        if (bestMatch && bestDistance <= Math.max(normTarget.length, 3) * 0.4) return bestMatch;
+                    }
+                }
+            } catch (e) { console.error("Notion search failed", e); }
+            return null;
         };
 
         // --- Components ---
@@ -248,12 +300,12 @@
                             <div className="neu-flat w-10 h-10 flex items-center justify-center text-xl">📚</div>
                             <h1 className="text-xl font-bold tracking-wider text-[var(--text-main)]">SCANNER</h1>
                         </div>
-                        <div className="text-[10px] text-[var(--text-sub)] font-mono tracking-widest">V5.6.3</div>
+                        <div className="text-[10px] text-[var(--text-sub)] font-mono tracking-widest">V5.6.4</div>
                     </div>
                     <div className="flex-grow overflow-y-auto hide-scrollbar px-4 pb-32">
-                        {/* settings prop added to ScannerView */}
+                        {/* settings prop passed to all views */}
                         {view === 'scan' && <ScannerView onDetected={addBook} settings={settings} />}
-                        {view === 'bulk' && <BulkImportView onBulkDetected={addBooksBulk} />}
+                        {view === 'bulk' && <BulkImportView onBulkDetected={addBooksBulk} settings={settings} />}
                         {view === 'history' && <HistoryView books={scannedBooks} settings={settings} setBooks={setScannedBooks} onUpdate={updateBook} />}
                         {view === 'settings' && <SettingsView settings={settings} setSettings={setSettings} />}
                     </div>
@@ -266,7 +318,7 @@
             const [isOpen, setIsOpen] = useState(false);
             const items = [
                 { id: 'scan', icon: ScanLine, color: '#00d1b2' },
-                { id: 'bulk', icon: ImportIcon, color: '#FF9F1C' }, // New Item
+                { id: 'bulk', icon: ImportIcon, color: '#FF9F1C' },
                 { id: 'history', icon: ListIcon, color: '#ff0080' },
                 { id: 'settings', icon: SettingsIcon, color: '#7928ca' },
             ];
@@ -275,7 +327,7 @@
                     <div className={`absolute transition-all duration-300 ${isOpen?'scale-100 opacity-100':'scale-50 opacity-0 pointer-events-none'}`}>
                         {items.map((it, i) => {
                             const total = items.length - 1;
-                            const range = 90; // 90 degrees range (180 to 270)
+                            const range = 90;
                             const startAngle = 180;
                             const ang = startAngle + (i * range / total);
                             const rad = 90;
@@ -296,7 +348,7 @@
             );
         }
 
-        // Updated ScannerView to use shared logic
+        // Updated ScannerView to use shared logic from global scope
         function ScannerView({ onDetected, settings }) {
             const [scanning, setScanning] = useState(false);
             const [manualIsbn, setManualIsbn] = useState('');
@@ -316,56 +368,6 @@
 
             const stop = () => { if(scannerRef.current?.isScanning) scannerRef.current.stop().then(()=>scannerRef.current.clear()).catch(console.error); setScanning(false); };
 
-            const searchNotionForSeries = async (seriesName) => {
-                if (!settings.notionToken || !settings.databaseId || !seriesName) return null;
-                try {
-                    const cleanName = seriesName.replace(/[：:－―\-\(\)\[\]（）]/g, ' ').trim();
-                    const words = cleanName.split(/\s+/).filter(w => w.length > 0);
-                    let keyword = words[0];
-                    if (!keyword || keyword.length < 2) keyword = seriesName;
-
-                    let proxy = settings.proxyUrl || '';
-                    const target = `https://api.notion.com/v1/databases/${settings.databaseId}/query`;
-                    const url = proxy.includes('corsproxy.io') ? proxy + encodeURIComponent(target) : proxy + target;
-
-                    const response = await fetch(url, {
-                        method: "POST",
-                        headers: { "Authorization": `Bearer ${settings.notionToken}`, "Content-Type": "application/json", "Notion-Version": "2022-06-28" },
-                        body: JSON.stringify({
-                            filter: { property: "作品名", rich_text: { contains: keyword } },
-                            page_size: 10,
-                            sorts: [{ timestamp: "created_time", direction: "descending" }]
-                        })
-                    });
-
-                    if (response.ok) {
-                        const data = await response.json();
-                        if (data.results && data.results.length > 0) {
-                            const normTarget = normalizeString(seriesName);
-                            let bestMatch = null;
-                            let bestDistance = Infinity;
-
-                            for (const page of data.results) {
-                                const props = page.properties;
-                                const getText = (p) => p?.rich_text?.[0]?.plain_text || p?.title?.[0]?.plain_text || "";
-                                const existingSeriesName = getText(props["作品名"]);
-                                const normExisting = normalizeString(existingSeriesName);
-                                const dist = getLevenshteinDistance(normTarget, normExisting);
-                                if (normTarget.includes(normExisting) || normExisting.includes(normTarget)) {
-                                    return { seriesName: existingSeriesName, author: getText(props["著作者"]), publisher: getText(props["出版社"]) };
-                                }
-                                if (dist < bestDistance) {
-                                    bestDistance = dist;
-                                    bestMatch = { seriesName: existingSeriesName, author: getText(props["著作者"]), publisher: getText(props["出版社"]) };
-                                }
-                            }
-                            if (bestMatch && bestDistance <= Math.max(normTarget.length, 3) * 0.4) return bestMatch;
-                        }
-                    }
-                } catch (e) { console.error("Notion search failed", e); }
-                return null;
-            };
-
             const processIsbn = async (isbn) => {
                 setLoading(true);
                 try {
@@ -374,7 +376,7 @@
 
                     // 類似データ統合ロジック
                     if (book.seriesName) {
-                        const existing = await searchNotionForSeries(book.seriesName);
+                        const existing = await searchNotionForSeries(book.seriesName, settings);
                         if (existing) {
                             if (confirm(`類似シリーズ『${existing.seriesName}』が見つかりました。\n情報を統一しますか？`)) {
                                 book.seriesName = existing.seriesName;
@@ -402,8 +404,8 @@
             );
         }
 
-        // New BulkImportView
-        function BulkImportView({ onBulkDetected }) {
+        // Updated BulkImportView with Fuzzy Matching
+        function BulkImportView({ onBulkDetected, settings }) {
             const [text, setText] = useState('');
             const [processing, setProcessing] = useState(false);
             const [progress, setProgress] = useState({ current: 0, total: 0 });
@@ -413,7 +415,6 @@
                 const isbns = text.match(/978[0-9-]{10,14}/g);
                 if (!isbns || isbns.length === 0) return alert("ISBNが見つかりません (978から始まる数字)");
                 
-                // 重複除去
                 const uniqueIsbns = [...new Set(isbns.map(i => i.replace(/[^0-9]/g, '')))];
                 
                 setProcessing(true);
@@ -421,6 +422,8 @@
                 setLogs([]);
 
                 const acquiredBooks = [];
+                const confirmedSeries = new Set(); // 統一を許可したシリーズ名
+                const deniedSeries = new Set();    // 統一を拒否したシリーズ名
 
                 for (let i = 0; i < uniqueIsbns.length; i++) {
                     setProgress(prev => ({ ...prev, current: i + 1 }));
@@ -429,6 +432,32 @@
                     try {
                         const book = await fetchBookInfo(isbn);
                         if (book) {
+                            // ゆらぎ検知 & 統合 (一括モード)
+                            if (book.seriesName) {
+                                const existing = await searchNotionForSeries(book.seriesName, settings);
+                                if (existing) {
+                                    const targetSeries = existing.seriesName;
+                                    
+                                    if (confirmedSeries.has(targetSeries)) {
+                                        // 既に許可済み -> 自動統合
+                                        book.seriesName = existing.seriesName;
+                                        if (existing.author) book.author = existing.author;
+                                        if (existing.publisher) book.publisher = existing.publisher;
+                                    } else if (!deniedSeries.has(targetSeries)) {
+                                        // 未確認 -> 確認ダイアログ
+                                        // 注意: ダイアログ中は処理が止まる
+                                        if (confirm(`【一括登録確認】\n類似シリーズ『${targetSeries}』が見つかりました。\n(スキャン結果: ${book.seriesName})\n\n情報を統一しますか？\n※「OK」を押すと、このシリーズの他の巻も自動で統一されます。`)) {
+                                            confirmedSeries.add(targetSeries);
+                                            book.seriesName = existing.seriesName;
+                                            if (existing.author) book.author = existing.author;
+                                            if (existing.publisher) book.publisher = existing.publisher;
+                                        } else {
+                                            deniedSeries.add(targetSeries);
+                                        }
+                                    }
+                                }
+                            }
+
                             acquiredBooks.push(book);
                             setLogs(prev => [`✅ ${book.fullTitle}`, ...prev]);
                         } else {
