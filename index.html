@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Notion Manga Scanner v5.8.0</title>
+    <title>Notion Manga Scanner v5.10.0</title>
     <script>
         window.onerror = function(msg, url, line, col, error) {
             const div = document.createElement("div");
@@ -29,6 +29,9 @@
             --text-main: #e0e6ed;
             --text-sub: #676e8a;
             --accent: #00d1b2;
+            --warning: #e0af68;
+            --danger: #f7768e;
+            --success: #9ece6a;
             --shadow-light: #353a50;
             --shadow-dark: #1d202c;
         }
@@ -73,8 +76,10 @@
         const X = (props) => <Icon {...props}><path d="M18 6 6 18"/><path d="m6 6 12 12"/></Icon>;
         const Search = (props) => <Icon {...props}><circle cx="11" cy="11" r="8"/><line x1="21" x2="16.65" y1="21" y2="16.65"/></Icon>;
         const Edit2 = (props) => <Icon {...props}><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></Icon>;
+        const AlertTriangle = (props) => <Icon {...props}><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></Icon>;
+        const CheckCircle = (props) => <Icon {...props}><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></Icon>;
 
-        // --- Logic ---
+        // --- Logic: Title Parsing & Fuzzy Matching ---
         const normalizeString = (str) => {
             if (!str) return "";
             return str.replace(/[！-～]/g, s => String.fromCharCode(s.charCodeAt(0) - 0xFEE0))
@@ -122,8 +127,7 @@
             return cleaned.trim();
         };
 
-        // --- Logic: Book Fetching (Enhanced) ---
-        // Helper to fetch from Google Books with various queries
+        // --- Logic: Book Fetching (Enhanced with Cross Validation) ---
         const fetchGoogleBooks = async (query) => {
             try {
                 const res = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(query)}&maxResults=1`);
@@ -147,16 +151,44 @@
             return null;
         };
 
+        const validateCover = (targetTitle, targetVol, foundBook) => {
+            if (!foundBook || !foundBook.cover) return { score: 'none', message: 'No Image' };
+
+            // 1. ISBN検索ならOKとする (Google ISBN or OpenBD)
+            // この関数はタイトル検索時の検証に主に使うが、呼び出し元で制御する
+            
+            // 2. 巻数チェック
+            if (targetVol !== null && foundBook.title) {
+                const foundParsed = parseBookTitle(foundBook.title);
+                if (foundParsed.volume !== null && foundParsed.volume !== targetVol) {
+                    return { score: 'warning', message: `巻数不一致? (Hit: ${foundParsed.volume})` };
+                }
+            }
+            
+            // 3. タイトル類似度 (簡易)
+            if (targetTitle && foundBook.title) {
+                const normTarget = normalizeString(targetTitle);
+                const normFound = normalizeString(foundBook.title);
+                if (!normFound.includes(normTarget) && !normTarget.includes(normFound)) {
+                     // 著しく違う場合
+                     const dist = getLevenshteinDistance(normTarget, normFound);
+                     if (dist > normTarget.length * 0.5) {
+                         return { score: 'warning', message: '別作品の可能性' };
+                     }
+                }
+            }
+
+            return { score: 'medium', message: 'OK' }; // タイトル検索で見つかったものはMediumとする
+        };
+
         const fetchBookInfo = async (isbn) => {
             try {
                 const cleanIsbn = isbn.replace(/[^0-9]/g, '');
                 if (cleanIsbn.length !== 13) throw new Error("13桁のISBNを入力");
 
-                let bookData = { isbn: cleanIsbn, title: '', seriesName: '', volume: null, author: '', publisher: '', cover: '' };
+                let bookData = { isbn: cleanIsbn, title: '', seriesName: '', volume: null, author: '', publisher: '', cover: '', coverScore: 'none', statusMsg: '' };
                 
-                // ----------------------------------------------------
-                // Step 1: OpenBD (Base Info & High Quality Cover)
-                // ----------------------------------------------------
+                // 1. OpenBD (ISBN) -> High Confidence
                 try {
                     const res = await fetch(`https://api.openbd.jp/v1/get?isbn=${cleanIsbn}`);
                     const json = await res.json();
@@ -166,6 +198,7 @@
                         bookData.author = cleanAuthorName(s.author);
                         bookData.publisher = s.publisher;
                         bookData.cover = s.cover;
+                        if (s.cover) bookData.coverScore = 'high';
                         try {
                             const o = json[0].onix;
                             const te = o?.DescriptiveDetail?.TitleDetail?.TitleElement;
@@ -176,47 +209,49 @@
                     }
                 } catch(e) { console.warn("OpenBD failed", e); }
 
-                // ----------------------------------------------------
-                // Step 2-5: Google Books (Iterative Search for Cover)
-                // ----------------------------------------------------
-                // 画像が見つかるまで、検索条件を緩めながらトライする
-                
-                // Strategy A: ISBN Search
+                // 2. Google Books (ISBN) -> Medium/High Confidence
                 if (!bookData.cover) {
                     const gBook = await fetchGoogleBooks(`isbn:${cleanIsbn}`);
                     if (gBook) {
                         if (!bookData.title) bookData.title = gBook.title;
                         if (!bookData.author) bookData.author = gBook.author;
                         if (!bookData.publisher) bookData.publisher = gBook.publisher;
-                        if (gBook.cover) bookData.cover = gBook.cover;
+                        if (gBook.cover) {
+                            bookData.cover = gBook.cover;
+                            bookData.coverScore = 'high'; // ISBN match is trusted
+                        }
                     }
                 }
 
-                // Strategy B: Title + Author (if info exists)
-                if (!bookData.cover && bookData.title && bookData.author) {
-                    const gBook = await fetchGoogleBooks(`${bookData.title} ${bookData.author}`);
-                    if (gBook && gBook.cover) bookData.cover = gBook.cover;
-                }
+                // 3. Google Books (Title Search) -> Validation Required
+                if (bookData.title && !bookData.cover) {
+                    const parsed = parseBookTitle(bookData.title, bookData.volume);
+                    
+                    // Strategy C: Title + Volume
+                    if (!bookData.cover && parsed.series && parsed.volume) {
+                         const gBook = await fetchGoogleBooks(`${parsed.series} ${parsed.volume}`);
+                         if (gBook && gBook.cover) {
+                             const val = validateCover(parsed.series, parsed.volume, gBook);
+                             bookData.cover = gBook.cover;
+                             bookData.coverScore = val.score;
+                             bookData.statusMsg = val.message;
+                         }
+                    }
 
-                // Strategy C: Title + Volume (Important for Manga series)
-                // 解析して巻数がわかっていれば "Title 10" のように検索
-                if (!bookData.cover && bookData.title) {
-                    const parsedForSearch = parseBookTitle(bookData.title, bookData.volume);
-                    if (parsedForSearch.series && parsedForSearch.volume) {
-                        const gBook = await fetchGoogleBooks(`${parsedForSearch.series} ${parsedForSearch.volume}`);
-                        if (gBook && gBook.cover) bookData.cover = gBook.cover;
+                    // Strategy B/D: Title + Author
+                    if (!bookData.cover) {
+                        const query = bookData.author ? `${bookData.title} ${bookData.author}` : bookData.title;
+                        const gBook = await fetchGoogleBooks(query.trim());
+                         if (gBook && gBook.cover) {
+                             const val = validateCover(bookData.title, bookData.volume, gBook);
+                             bookData.cover = gBook.cover;
+                             bookData.coverScore = val.score;
+                             bookData.statusMsg = val.message;
+                         }
                     }
                 }
 
-                // Strategy D: Title Only (Last resort for Google)
-                if (!bookData.cover && bookData.title) {
-                    const gBook = await fetchGoogleBooks(bookData.title);
-                    if (gBook && gBook.cover) bookData.cover = gBook.cover;
-                }
-
-                // ----------------------------------------------------
-                // Step 6: Open Library (Final Validation)
-                // ----------------------------------------------------
+                // 4. Open Library -> Low Confidence
                 if (!bookData.cover) {
                     try {
                         const olKey = `ISBN:${cleanIsbn}`;
@@ -224,6 +259,8 @@
                         const olData = await olRes.json();
                         if (olData[olKey] && olData[olKey].cover) {
                             bookData.cover = olData[olKey].cover.large || olData[olKey].cover.medium;
+                            bookData.coverScore = 'low'; 
+                            bookData.statusMsg = 'From OpenLibrary';
                         }
                     } catch (e) { console.warn("OpenLibrary API failed", e); }
                 }
@@ -238,7 +275,9 @@
                     author: bookData.author,
                     publisher: bookData.publisher,
                     isbn: bookData.isbn,
-                    cover: bookData.cover
+                    cover: bookData.cover,
+                    coverScore: bookData.coverScore,
+                    statusMsg: bookData.statusMsg
                 };
             } catch (e) {
                 console.error(e);
@@ -246,7 +285,7 @@
             }
         };
 
-        // --- Logic: Notion Search (Shared) ---
+        // --- Logic: Notion Search ---
         const searchNotionForSeries = async (seriesName, settings) => {
             if (!settings.notionToken || !settings.databaseId || !seriesName) return null;
             try {
@@ -346,10 +385,9 @@
                             <div className="neu-flat w-10 h-10 flex items-center justify-center text-xl">📚</div>
                             <h1 className="text-xl font-bold tracking-wider text-[var(--text-main)]">SCANNER</h1>
                         </div>
-                        <div className="text-[10px] text-[var(--text-sub)] font-mono tracking-widest">V5.8.0</div>
+                        <div className="text-[10px] text-[var(--text-sub)] font-mono tracking-widest">V5.10.0</div>
                     </div>
                     <div className="flex-grow overflow-y-auto hide-scrollbar px-4 pb-32">
-                        {/* settings prop added to ScannerView */}
                         {view === 'scan' && <ScannerView onDetected={addBook} settings={settings} />}
                         {view === 'bulk' && <BulkImportView onBulkDetected={addBooksBulk} settings={settings} />}
                         {view === 'history' && <HistoryView books={scannedBooks} settings={settings} setBooks={setScannedBooks} onUpdate={updateBook} />}
@@ -394,7 +432,6 @@
             );
         }
 
-        // Updated ScannerView to use shared logic from global scope
         function ScannerView({ onDetected, settings }) {
             const [scanning, setScanning] = useState(false);
             const [manualIsbn, setManualIsbn] = useState('');
@@ -413,6 +450,56 @@
             }, [scanning]);
 
             const stop = () => { if(scannerRef.current?.isScanning) scannerRef.current.stop().then(()=>scannerRef.current.clear()).catch(console.error); setScanning(false); };
+
+            const searchNotionForSeries = async (seriesName) => {
+                if (!settings.notionToken || !settings.databaseId || !seriesName) return null;
+                try {
+                    const cleanName = seriesName.replace(/[：:－―\-\(\)\[\]（）]/g, ' ').trim();
+                    const words = cleanName.split(/\s+/).filter(w => w.length > 0);
+                    let keyword = words[0];
+                    if (!keyword || keyword.length < 2) keyword = seriesName;
+
+                    let proxy = settings.proxyUrl || '';
+                    const target = `https://api.notion.com/v1/databases/${settings.databaseId}/query`;
+                    const url = proxy.includes('corsproxy.io') ? proxy + encodeURIComponent(target) : proxy + target;
+
+                    const response = await fetch(url, {
+                        method: "POST",
+                        headers: { "Authorization": `Bearer ${settings.notionToken}`, "Content-Type": "application/json", "Notion-Version": "2022-06-28" },
+                        body: JSON.stringify({
+                            filter: { property: "作品名", rich_text: { contains: keyword } },
+                            page_size: 10,
+                            sorts: [{ timestamp: "created_time", direction: "descending" }]
+                        })
+                    });
+
+                    if (response.ok) {
+                        const data = await response.json();
+                        if (data.results && data.results.length > 0) {
+                            const normTarget = normalizeString(seriesName);
+                            let bestMatch = null;
+                            let bestDistance = Infinity;
+
+                            for (const page of data.results) {
+                                const props = page.properties;
+                                const getText = (p) => p?.rich_text?.[0]?.plain_text || p?.title?.[0]?.plain_text || "";
+                                const existingSeriesName = getText(props["作品名"]);
+                                const normExisting = normalizeString(existingSeriesName);
+                                const dist = getLevenshteinDistance(normTarget, normExisting);
+                                if (normTarget.includes(normExisting) || normExisting.includes(normTarget)) {
+                                    return { seriesName: existingSeriesName, author: getText(props["著作者"]), publisher: getText(props["出版社"]) };
+                                }
+                                if (dist < bestDistance) {
+                                    bestDistance = dist;
+                                    bestMatch = { seriesName: existingSeriesName, author: getText(props["著作者"]), publisher: getText(props["出版社"]) };
+                                }
+                            }
+                            if (bestMatch && bestDistance <= Math.max(normTarget.length, 3) * 0.4) return bestMatch;
+                        }
+                    }
+                } catch (e) { console.error("Notion search failed", e); }
+                return null;
+            };
 
             const processIsbn = async (isbn) => {
                 setLoading(true);
@@ -450,7 +537,7 @@
             );
         }
 
-        // Updated BulkImportView with Fuzzy Matching
+        // Updated BulkImportView
         function BulkImportView({ onBulkDetected, settings }) {
             const [text, setText] = useState('');
             const [processing, setProcessing] = useState(false);
@@ -459,7 +546,7 @@
 
             const handleBulk = async () => {
                 const isbns = text.match(/978[0-9-]{10,14}/g);
-                if (!isbns || isbns.length === 0) return alert("ISBNが見つかりません (978から始まる数字)");
+                if (!isbns || isbns.length === 0) return alert("ISBNが見つかりません");
                 
                 const uniqueIsbns = [...new Set(isbns.map(i => i.replace(/[^0-9]/g, '')))];
                 
@@ -482,13 +569,12 @@
                                 const existing = await searchNotionForSeries(book.seriesName, settings);
                                 if (existing) {
                                     const targetSeries = existing.seriesName;
-                                    
                                     if (confirmedSeries.has(targetSeries)) {
                                         book.seriesName = existing.seriesName;
                                         if (existing.author) book.author = existing.author;
                                         if (existing.publisher) book.publisher = existing.publisher;
                                     } else if (!deniedSeries.has(targetSeries)) {
-                                        if (confirm(`【一括登録確認】\n類似シリーズ『${targetSeries}』が見つかりました。\n(スキャン結果: ${book.seriesName})\n\n情報を統一しますか？\n※「OK」を押すと、このシリーズの他の巻も自動で統一されます。`)) {
+                                        if (confirm(`【一括登録】類似『${targetSeries}』発見。\n情報を統一しますか？`)) {
                                             confirmedSeries.add(targetSeries);
                                             book.seriesName = existing.seriesName;
                                             if (existing.author) book.author = existing.author;
@@ -499,7 +585,6 @@
                                     }
                                 }
                             }
-
                             acquiredBooks.push(book);
                             setLogs(prev => [`✅ ${book.fullTitle}`, ...prev]);
                         } else {
@@ -508,52 +593,29 @@
                     } catch (e) {
                         setLogs(prev => [`❌ ${isbn} (エラー)`, ...prev]);
                     }
-                    
                     await new Promise(r => setTimeout(r, 1000));
                 }
-                
                 setProcessing(false);
-                
                 if (acquiredBooks.length > 0) {
                     onBulkDetected(acquiredBooks);
-                    alert(`${acquiredBooks.length}冊を取得しました。リスト画面へ移動します。`);
-                } else {
-                    alert("書籍情報を取得できませんでした。");
-                }
+                    alert(`${acquiredBooks.length}冊を取得しました。`);
+                } else alert("書籍情報を取得できませんでした。");
             };
 
             return (
                 <div className="pt-4 space-y-6 animate-fade-in h-full flex flex-col">
                     <div className="neu-flat p-5 flex-grow flex flex-col">
                         <h3 className="font-bold text-[var(--accent)] mb-2 flex items-center gap-2"><ImportIcon size={18}/> 一括登録 (BULK)</h3>
-                        <p className="text-xs text-[var(--text-sub)] mb-4">ISBNを貼り付けてください（改行・スペース区切りOK）</p>
-                        
+                        <p className="text-xs text-[var(--text-sub)] mb-4">ISBNを貼り付けてください</p>
                         <div className="neu-pressed p-2 flex-grow mb-4 rounded-xl">
-                            <textarea 
-                                value={text}
-                                onChange={e => setText(e.target.value)}
-                                placeholder="9784..."
-                                className="w-full h-full bg-transparent border-none outline-none text-[var(--text-main)] text-sm resize-none font-mono"
-                            ></textarea>
+                            <textarea value={text} onChange={e => setText(e.target.value)} placeholder="9784..." className="w-full h-full bg-transparent border-none outline-none text-[var(--text-main)] text-sm resize-none font-mono"></textarea>
                         </div>
-
-                        <button 
-                            onClick={handleBulk} 
-                            disabled={processing || !text}
-                            className={`w-full py-3 rounded-xl font-bold text-sm shadow-lg transition-all ${processing ? 'bg-gray-600 text-gray-400' : 'bg-[var(--accent)] text-[#292d3e] hover:brightness-110'}`}
-                        >
-                            {processing ? `取得中 (${progress.current}/${progress.total})...` : '一括取得開始'}
-                        </button>
+                        <button onClick={handleBulk} disabled={processing || !text} className={`w-full py-3 rounded-xl font-bold text-sm shadow-lg transition-all ${processing ? 'bg-gray-600 text-gray-400' : 'bg-[var(--accent)] text-[#292d3e] hover:brightness-110'}`}>{processing ? `取得中 (${progress.current}/${progress.total})...` : '一括取得開始'}</button>
                     </div>
-
                     {logs.length > 0 && (
                         <div className="neu-flat p-4 max-h-40 overflow-y-auto">
                             <h4 className="text-xs font-bold text-[var(--text-sub)] mb-2">ログ</h4>
-                            <ul className="space-y-1">
-                                {logs.map((log, i) => (
-                                    <li key={i} className="text-xs truncate">{log}</li>
-                                ))}
-                            </ul>
+                            <ul className="space-y-1">{logs.map((log, i) => <li key={i} className="text-xs truncate">{log}</li>)}</ul>
                         </div>
                     )}
                 </div>
@@ -572,7 +634,7 @@
                 setStatus(p=>({...p, [book.isbn]:'loading'}));
 
                 try {
-                    // --- Dup Check ---
+                    // Dup Check
                     try {
                         let proxy = settings.proxyUrl || '';
                         const getUrl = (target) => proxy.includes('corsproxy.io') ? proxy + encodeURIComponent(target) : proxy + target;
@@ -593,7 +655,7 @@
                         }
                     } catch(e) { console.warn("DupCheck Skipped:", e); }
 
-                    // --- Send ---
+                    // Send
                     let c = book.cover?.trim()||"";
                     if(c) { c=c.replace(/^http:\/\//i,'https://'); if(c.includes('books.google')||c.includes('googleapis')) c=c.replace('&edge=curl',''); }
                     const safe = t => t && String(t).trim().length>0 ? String(t) : "-";
@@ -608,7 +670,6 @@
                     };
                     if (c) {
                         if (c.length <= 2000) props["書影URL"] = { url: c };
-                        // Check URL length for Files property
                         if (c.length <= 2000) {
                             props["書影"] = { files: [{ name: safe(book.fullTitle), type: "external", external: { url: c } }] };
                         }
@@ -657,8 +718,11 @@
                     <div className="grid gap-4">
                         {books.map(b => (
                             <div key={b.isbn} className="neu-flat p-4 flex gap-4 relative overflow-hidden">
-                                <div className="w-20 h-28 flex-shrink-0 rounded-lg overflow-hidden shadow-lg bg-[#202330] relative">
+                                <div className="w-20 h-28 flex-shrink-0 rounded-lg overflow-hidden shadow-lg bg-[#202330] relative group cursor-pointer" onClick={() => {if(b.cover) window.open(`https://www.google.com/search?tbm=isch&q=${encodeURIComponent(b.fullTitle)}`, '_blank')}}>
                                     {b.cover ? <img src={b.cover} className="w-full h-full object-cover"/> : <div className="w-full h-full flex items-center justify-center text-xs text-gray-600 font-bold">NO IMG</div>}
+                                    {/* Score Indicator */}
+                                    {b.coverScore === 'warning' && <div className="absolute top-1 right-1 bg-yellow-500 text-black text-[9px] font-bold px-1.5 py-0.5 rounded shadow flex items-center gap-1 z-10"><AlertTriangle size={10}/> 不一致?</div>}
+                                    {b.coverScore === 'high' && <div className="absolute top-1 right-1 bg-green-500 text-white text-[9px] font-bold px-1.5 py-0.5 rounded shadow z-10"><CheckCircle size={10}/></div>}
                                 </div>
                                 <div className="flex-grow min-w-0 flex flex-col justify-between">
                                     <div>
@@ -671,17 +735,14 @@
                                             {b.volume && <span className="text-[10px] bg-[#202330] px-2 py-1 rounded text-white border border-white/10">{b.volume}</span>}
                                         </div>
                                         <p className="text-xs text-[var(--text-sub)] mt-1 truncate">{b.author}</p>
+                                        {b.statusMsg && b.statusMsg !== 'OK' && b.statusMsg !== 'No Image' && <p className="text-[9px] text-yellow-500 mt-1">{b.statusMsg}</p>}
                                     </div>
                                     <div className="mt-2 flex flex-col items-end gap-1">
                                         <div className="flex gap-3">
                                             <button onClick={()=>setEditing(b)} className="p-2 rounded-full neu-btn text-[var(--text-sub)] hover:text-white"><Edit2 size={14}/></button>
                                             <button onClick={()=>send(b)} disabled={status[b.isbn]==='loading'} className={`px-4 py-1.5 rounded-full neu-btn text-xs font-bold ${status[b.isbn]?'text-red-400':'text-[var(--accent)]'}`}>{status[b.isbn]==='loading'?'...':'SEND'}</button>
                                         </div>
-                                        {status[b.isbn] && status[b.isbn] !== 'loading' && (
-                                            <p className="text-[10px] text-red-400 max-w-full break-all bg-[#202330] p-1 rounded border border-red-900/50">
-                                                {status[b.isbn].includes('Failed to fetch') ? '通信エラー: Proxyを確認' : status[b.isbn]}
-                                            </p>
-                                        )}
+                                        {status[b.isbn] && status[b.isbn] !== 'loading' && <p className="text-[10px] text-red-400 max-w-full break-all bg-[#202330] p-1 rounded border border-red-900/50">{status[b.isbn].includes('Failed') ? '通信エラー: Proxy確認' : status[b.isbn]}</p>}
                                     </div>
                                 </div>
                             </div>
