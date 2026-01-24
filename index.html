@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Notion Manga Scanner v5.6.4</title>
+    <title>Notion Manga Scanner v5.7.0</title>
     <script>
         window.onerror = function(msg, url, line, col, error) {
             const div = document.createElement("div");
@@ -115,12 +115,9 @@
             return { full: rawTitle, series: seriesName, volume };
         };
 
-        // --- Logic: Author Name Cleaning ---
         const cleanAuthorName = (author) => {
             if (!author) return "";
-            // カンマをスペースに置換
             let cleaned = author.replace(/,/g, ' ');
-            // 連続するスペースを1つに
             cleaned = cleaned.replace(/\s+/g, ' ');
             return cleaned.trim();
         };
@@ -178,8 +175,18 @@
                     } catch(e) { console.warn("Google Books Title Search failed", e); }
                 }
 
-                // 4. Open Library
-                if (!bookData.cover) bookData.cover = `https://covers.openlibrary.org/b/isbn/${cleanIsbn}-L.jpg`;
+                // 4. Open Library (API Check)
+                // v5.7.0 Fix: Validate Open Library image existence via API
+                if (!bookData.cover) {
+                    try {
+                        const olKey = `ISBN:${cleanIsbn}`;
+                        const olRes = await fetch(`https://openlibrary.org/api/books?bibkeys=${olKey}&format=json&jscmd=data`);
+                        const olData = await olRes.json();
+                        if (olData[olKey] && olData[olKey].cover) {
+                            bookData.cover = olData[olKey].cover.large || olData[olKey].cover.medium;
+                        }
+                    } catch (e) { console.warn("OpenLibrary API failed", e); }
+                }
 
                 if (!bookData.title) throw new Error("データなし");
 
@@ -203,7 +210,6 @@
         const searchNotionForSeries = async (seriesName, settings) => {
             if (!settings.notionToken || !settings.databaseId || !seriesName) return null;
             try {
-                // 検索精度の向上: 記号をスペースに変換し、最初の意味のある単語(2文字以上)で検索する
                 const cleanName = seriesName.replace(/[：:－―\-\(\)\[\]（）]/g, ' ').trim();
                 const words = cleanName.split(/\s+/).filter(w => w.length > 0);
                 let keyword = words[0];
@@ -300,10 +306,10 @@
                             <div className="neu-flat w-10 h-10 flex items-center justify-center text-xl">📚</div>
                             <h1 className="text-xl font-bold tracking-wider text-[var(--text-main)]">SCANNER</h1>
                         </div>
-                        <div className="text-[10px] text-[var(--text-sub)] font-mono tracking-widest">V5.6.4</div>
+                        <div className="text-[10px] text-[var(--text-sub)] font-mono tracking-widest">V5.7.0</div>
                     </div>
                     <div className="flex-grow overflow-y-auto hide-scrollbar px-4 pb-32">
-                        {/* settings prop passed to all views */}
+                        {/* settings prop added to ScannerView */}
                         {view === 'scan' && <ScannerView onDetected={addBook} settings={settings} />}
                         {view === 'bulk' && <BulkImportView onBulkDetected={addBooksBulk} settings={settings} />}
                         {view === 'history' && <HistoryView books={scannedBooks} settings={settings} setBooks={setScannedBooks} onUpdate={updateBook} />}
@@ -348,7 +354,7 @@
             );
         }
 
-        // Updated ScannerView to use shared logic from global scope
+        // Updated ScannerView to use shared logic
         function ScannerView({ onDetected, settings }) {
             const [scanning, setScanning] = useState(false);
             const [manualIsbn, setManualIsbn] = useState('');
@@ -422,8 +428,8 @@
                 setLogs([]);
 
                 const acquiredBooks = [];
-                const confirmedSeries = new Set(); // 統一を許可したシリーズ名
-                const deniedSeries = new Set();    // 統一を拒否したシリーズ名
+                const confirmedSeries = new Set();
+                const deniedSeries = new Set();
 
                 for (let i = 0; i < uniqueIsbns.length; i++) {
                     setProgress(prev => ({ ...prev, current: i + 1 }));
@@ -432,20 +438,16 @@
                     try {
                         const book = await fetchBookInfo(isbn);
                         if (book) {
-                            // ゆらぎ検知 & 統合 (一括モード)
                             if (book.seriesName) {
                                 const existing = await searchNotionForSeries(book.seriesName, settings);
                                 if (existing) {
                                     const targetSeries = existing.seriesName;
                                     
                                     if (confirmedSeries.has(targetSeries)) {
-                                        // 既に許可済み -> 自動統合
                                         book.seriesName = existing.seriesName;
                                         if (existing.author) book.author = existing.author;
                                         if (existing.publisher) book.publisher = existing.publisher;
                                     } else if (!deniedSeries.has(targetSeries)) {
-                                        // 未確認 -> 確認ダイアログ
-                                        // 注意: ダイアログ中は処理が止まる
                                         if (confirm(`【一括登録確認】\n類似シリーズ『${targetSeries}』が見つかりました。\n(スキャン結果: ${book.seriesName})\n\n情報を統一しますか？\n※「OK」を押すと、このシリーズの他の巻も自動で統一されます。`)) {
                                             confirmedSeries.add(targetSeries);
                                             book.seriesName = existing.seriesName;
@@ -467,7 +469,6 @@
                         setLogs(prev => [`❌ ${isbn} (エラー)`, ...prev]);
                     }
                     
-                    // APIレート制限考慮
                     await new Promise(r => setTimeout(r, 1000));
                 }
                 
@@ -531,7 +532,7 @@
                 setStatus(p=>({...p, [book.isbn]:'loading'}));
 
                 try {
-                    // --- 重複チェック (失敗しても続行) ---
+                    // --- Dup Check ---
                     try {
                         let proxy = settings.proxyUrl || '';
                         const getUrl = (target) => proxy.includes('corsproxy.io') ? proxy + encodeURIComponent(target) : proxy + target;
@@ -552,7 +553,7 @@
                         }
                     } catch(e) { console.warn("DupCheck Skipped:", e); }
 
-                    // --- 本送信 ---
+                    // --- Send ---
                     let c = book.cover?.trim()||"";
                     if(c) { c=c.replace(/^http:\/\//i,'https://'); if(c.includes('books.google')||c.includes('googleapis')) c=c.replace('&edge=curl',''); }
                     const safe = t => t && String(t).trim().length>0 ? String(t) : "-";
@@ -583,7 +584,6 @@
                         setStatus(p=>{const n={...p}; delete n[book.isbn]; return n;}); 
                         return true;
                     } else {
-                        // 修正箇所: テキストとして取得してからJSONパース
                         const errText = await r.text();
                         let msg = errText;
                         try {
@@ -594,7 +594,7 @@
                     }
                 } catch(e) { 
                     console.error(e); 
-                    setStatus(p=>({...p, [book.isbn]: e.message})); // 詳細メッセージを保存
+                    setStatus(p=>({...p, [book.isbn]: e.message})); 
                     return false;
                 }
             };
