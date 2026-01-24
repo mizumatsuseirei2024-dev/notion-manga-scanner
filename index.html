@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Notion Manga Scanner v5.7.0</title>
+    <title>Notion Manga Scanner v5.8.0</title>
     <script>
         window.onerror = function(msg, url, line, col, error) {
             const div = document.createElement("div");
@@ -74,7 +74,7 @@
         const Search = (props) => <Icon {...props}><circle cx="11" cy="11" r="8"/><line x1="21" x2="16.65" y1="21" y2="16.65"/></Icon>;
         const Edit2 = (props) => <Icon {...props}><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></Icon>;
 
-        // --- Logic: Title Parsing & Fuzzy Matching ---
+        // --- Logic ---
         const normalizeString = (str) => {
             if (!str) return "";
             return str.replace(/[！-～]/g, s => String.fromCharCode(s.charCodeAt(0) - 0xFEE0))
@@ -122,15 +122,41 @@
             return cleaned.trim();
         };
 
-        // --- Logic: Book Fetching (Shared) ---
+        // --- Logic: Book Fetching (Enhanced) ---
+        // Helper to fetch from Google Books with various queries
+        const fetchGoogleBooks = async (query) => {
+            try {
+                const res = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(query)}&maxResults=1`);
+                const json = await res.json();
+                if (json.items && json.items.length > 0) {
+                    const info = json.items[0].volumeInfo;
+                    let cover = null;
+                    if (info.imageLinks?.thumbnail) {
+                        cover = info.imageLinks.thumbnail.replace(/^http:\/\//, 'https://');
+                    }
+                    return {
+                        title: info.title,
+                        author: info.authors ? cleanAuthorName(info.authors.join(' ')) : null,
+                        publisher: info.publisher,
+                        cover: cover
+                    };
+                }
+            } catch (e) {
+                console.warn(`Google Books fetch failed for query: ${query}`, e);
+            }
+            return null;
+        };
+
         const fetchBookInfo = async (isbn) => {
             try {
                 const cleanIsbn = isbn.replace(/[^0-9]/g, '');
                 if (cleanIsbn.length !== 13) throw new Error("13桁のISBNを入力");
 
                 let bookData = { isbn: cleanIsbn, title: '', seriesName: '', volume: null, author: '', publisher: '', cover: '' };
-
-                // 1. OpenBD
+                
+                // ----------------------------------------------------
+                // Step 1: OpenBD (Base Info & High Quality Cover)
+                // ----------------------------------------------------
                 try {
                     const res = await fetch(`https://api.openbd.jp/v1/get?isbn=${cleanIsbn}`);
                     const json = await res.json();
@@ -150,33 +176,47 @@
                     }
                 } catch(e) { console.warn("OpenBD failed", e); }
 
-                // 2. Google Books (ISBN)
-                if (!bookData.title || !bookData.cover) {
-                    try {
-                        const res = await fetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${cleanIsbn}`);
-                        const json = await res.json();
-                        if (json.items?.[0]?.volumeInfo) {
-                            const info = json.items[0].volumeInfo;
-                            if (!bookData.title) bookData.title = info.title;
-                            if (!bookData.author && info.authors) bookData.author = cleanAuthorName(info.authors.join(' '));
-                            if (!bookData.publisher && info.publisher) bookData.publisher = info.publisher;
-                            if (!bookData.cover && info.imageLinks?.thumbnail) bookData.cover = info.imageLinks.thumbnail.replace(/^http:\/\//, 'https://');
-                        }
-                    } catch(e) { console.warn("Google Books ISBN failed", e); }
+                // ----------------------------------------------------
+                // Step 2-5: Google Books (Iterative Search for Cover)
+                // ----------------------------------------------------
+                // 画像が見つかるまで、検索条件を緩めながらトライする
+                
+                // Strategy A: ISBN Search
+                if (!bookData.cover) {
+                    const gBook = await fetchGoogleBooks(`isbn:${cleanIsbn}`);
+                    if (gBook) {
+                        if (!bookData.title) bookData.title = gBook.title;
+                        if (!bookData.author) bookData.author = gBook.author;
+                        if (!bookData.publisher) bookData.publisher = gBook.publisher;
+                        if (gBook.cover) bookData.cover = gBook.cover;
+                    }
                 }
 
-                // 3. Google Books (Title Search)
-                if (bookData.title && !bookData.cover) {
-                    try {
-                        const query = `${bookData.title} ${bookData.author}`.trim();
-                        const res = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(query)}&maxResults=1`);
-                        const json = await res.json();
-                        if (json.items?.[0]?.volumeInfo?.imageLinks?.thumbnail) bookData.cover = json.items[0].volumeInfo.imageLinks.thumbnail.replace(/^http:\/\//, 'https://');
-                    } catch(e) { console.warn("Google Books Title Search failed", e); }
+                // Strategy B: Title + Author (if info exists)
+                if (!bookData.cover && bookData.title && bookData.author) {
+                    const gBook = await fetchGoogleBooks(`${bookData.title} ${bookData.author}`);
+                    if (gBook && gBook.cover) bookData.cover = gBook.cover;
                 }
 
-                // 4. Open Library (API Check)
-                // v5.7.0 Fix: Validate Open Library image existence via API
+                // Strategy C: Title + Volume (Important for Manga series)
+                // 解析して巻数がわかっていれば "Title 10" のように検索
+                if (!bookData.cover && bookData.title) {
+                    const parsedForSearch = parseBookTitle(bookData.title, bookData.volume);
+                    if (parsedForSearch.series && parsedForSearch.volume) {
+                        const gBook = await fetchGoogleBooks(`${parsedForSearch.series} ${parsedForSearch.volume}`);
+                        if (gBook && gBook.cover) bookData.cover = gBook.cover;
+                    }
+                }
+
+                // Strategy D: Title Only (Last resort for Google)
+                if (!bookData.cover && bookData.title) {
+                    const gBook = await fetchGoogleBooks(bookData.title);
+                    if (gBook && gBook.cover) bookData.cover = gBook.cover;
+                }
+
+                // ----------------------------------------------------
+                // Step 6: Open Library (Final Validation)
+                // ----------------------------------------------------
                 if (!bookData.cover) {
                     try {
                         const olKey = `ISBN:${cleanIsbn}`;
@@ -306,7 +346,7 @@
                             <div className="neu-flat w-10 h-10 flex items-center justify-center text-xl">📚</div>
                             <h1 className="text-xl font-bold tracking-wider text-[var(--text-main)]">SCANNER</h1>
                         </div>
-                        <div className="text-[10px] text-[var(--text-sub)] font-mono tracking-widest">V5.7.0</div>
+                        <div className="text-[10px] text-[var(--text-sub)] font-mono tracking-widest">V5.8.0</div>
                     </div>
                     <div className="flex-grow overflow-y-auto hide-scrollbar px-4 pb-32">
                         {/* settings prop added to ScannerView */}
@@ -354,7 +394,7 @@
             );
         }
 
-        // Updated ScannerView to use shared logic
+        // Updated ScannerView to use shared logic from global scope
         function ScannerView({ onDetected, settings }) {
             const [scanning, setScanning] = useState(false);
             const [manualIsbn, setManualIsbn] = useState('');
